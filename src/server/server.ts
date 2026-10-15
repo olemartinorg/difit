@@ -9,7 +9,7 @@ import open from 'open';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { type DiffMode } from '../types/watch.js';
+import { DiffMode } from '../types/watch.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
 import {
   mergeCommentImports,
@@ -26,7 +26,8 @@ import {
 import { getFileExtension } from '../utils/fileUtils.js';
 
 import { FileWatcherService } from './file-watcher.js';
-import { GitDiffParser } from './git-diff.js';
+import { ReviewDiffParser } from './review-diff.js';
+import { ReviewApi } from './review-api.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
 
 import {
@@ -59,6 +60,7 @@ interface ServerOptions {
   diffMode?: DiffMode;
   repoPath?: string;
   contextLines?: number;
+  reviewByDefault?: boolean;
 }
 
 const GENERATED_STATUS_CACHE_TTL_MS = 60_000;
@@ -128,12 +130,20 @@ export async function startServer(
   const repositoryPath = resolve(options.repoPath ?? process.cwd());
   const repositoryId = createHash('sha256').update(repositoryPath).digest('hex');
   const initialCommentImports = options.commentImports || [];
-  const initialSelection = options.selection ?? createDiffSelection('', '');
+  const requestedInitialSelection = options.selection ?? createDiffSelection('', '');
   const commentImportId =
     initialCommentImports.length > 0
       ? createHash('sha256').update(serializeCommentImports(initialCommentImports)).digest('hex')
       : undefined;
-  const parser = new GitDiffParser(repositoryPath);
+  const parser = new ReviewDiffParser(repositoryPath);
+  const review = new ReviewApi(
+    repositoryPath,
+    repositoryId,
+    parser,
+    Boolean(options.reviewByDefault),
+    Boolean(options.stdinDiff),
+  );
+  const initialSelection = await review.initialSelection(requestedInitialSelection);
   const fileWatcher = new FileWatcherService();
   const generatedStatusCache = new Map<
     string,
@@ -304,6 +314,10 @@ export async function startServer(
           ? undefined
           : currentSelection.baseMode,
     );
+    requestedSelection.includeUntracked =
+      req.query.includeUntracked === 'true' ||
+      (!hasBase && !hasTarget && currentSelection.includeUntracked) ||
+      undefined;
     const shouldIncludeCommentImports =
       initialCommentImports.length > 0 &&
       (Boolean(options.stdinDiff) || diffSelectionsEqual(requestedSelection, initialSelection));
@@ -311,7 +325,9 @@ export async function startServer(
     let responseDiffData = initialDiffData;
     if (!options.stdinDiff) {
       const cacheKey = createDiffCacheKey(requestedSelection, ignoreWhitespace);
-      const cached = getCachedDiffResponse(diffDataCache, cacheKey);
+      const cached = ['.', 'working', 'staged'].includes(requestedSelection.targetCommitish)
+        ? undefined
+        : getCachedDiffResponse(diffDataCache, cacheKey);
       if (cached) {
         responseDiffData = cached;
       } else {
@@ -362,6 +378,8 @@ export async function startServer(
       requestedBaseCommitish,
       requestedTargetCommitish,
       requestedBaseMode,
+      requestedIncludeUntracked: requestedSelection.includeUntracked,
+      reviewAvailable: !options.stdinDiff,
       clearComments: options.clearComments,
       repositoryId,
       commentImports: shouldIncludeCommentImports ? initialCommentImports : undefined,
@@ -409,6 +427,8 @@ export async function startServer(
       res.status(500).json({ error: 'Failed to get generated status' });
     }
   });
+
+  review.registerRoutes(app, invalidateCache);
 
   // Get available revisions for revision selector
   app.get('/api/revisions', async (_req, res) => {
@@ -1061,9 +1081,9 @@ export async function startServer(
   }
 
   // Start file watcher
-  if (options.diffMode) {
+  if (options.diffMode || options.reviewByDefault) {
     try {
-      await fileWatcher.start(options.diffMode, repositoryPath, 300, invalidateCache);
+      await fileWatcher.start(DiffMode.REVIEW, repositoryPath, 300, invalidateCache);
     } catch (error) {
       console.warn('⚠️  File watcher failed to start:', error);
       console.warn('   Continuing without file watching...');
@@ -1071,7 +1091,7 @@ export async function startServer(
   }
 
   // Check if diff is empty and skip browser opening
-  if (initialDiffData.isEmpty) {
+  if (initialDiffData.isEmpty && !options.reviewByDefault) {
     // Don't open browser if no differences found
   } else if (options.openBrowser) {
     try {

@@ -44,6 +44,7 @@ export interface DiffSelection {
   baseCommitish: string;
   targetCommitish: string;
   baseMode?: BaseMode;
+  includeUntracked?: boolean;
 }
 
 export interface DiffResponse {
@@ -57,6 +58,8 @@ export interface DiffResponse {
   requestedBaseCommitish?: string;
   requestedTargetCommitish?: string;
   requestedBaseMode?: BaseMode;
+  requestedIncludeUntracked?: boolean;
+  reviewAvailable?: boolean;
   clearComments?: boolean;
   repositoryId?: string;
   commentImports?: CommentImport[];

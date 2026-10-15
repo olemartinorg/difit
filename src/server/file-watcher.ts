@@ -18,6 +18,10 @@ interface ModeWatchConfig {
 }
 
 const MODE_WATCH_CONFIGS: Record<DiffMode, ModeWatchConfig> = {
+  [DiffMode.REVIEW]: {
+    watchPaths: ['.', '.git'],
+    ignore: ['.git/objects/**', '.git/logs/**', 'node_modules/**'],
+  },
   [DiffMode.DEFAULT]: {
     watchPaths: ['.git'],
     ignore: ['.git/objects/**', '.git/refs/**', 'node_modules/**'],
@@ -92,8 +96,14 @@ export class FileWatcherService {
     // failing at module load time.
     const { subscribe } = await import('@parcel/watcher');
 
-    for (const watchPath of modeConfig.watchPaths) {
-      let fullPath = join(basePath, watchPath);
+    const watchPaths = [...modeConfig.watchPaths];
+    if (this.config?.diffMode === DiffMode.REVIEW && this.git) {
+      const commonDir = resolve(basePath, (await this.git.revparse(['--git-common-dir'])).trim());
+      if (commonDir !== (await this.resolveGitDir(basePath))) watchPaths.push(commonDir);
+    }
+    for (const watchPath of watchPaths) {
+      let fullPath = resolve(basePath, watchPath);
+      const isGitPath = watchPath !== '.';
 
       // Resolve git worktree path for .git directory
       if (watchPath === '.git') {
@@ -122,9 +132,12 @@ export class FileWatcherService {
               }
 
               // For git directory watching, only care about specific files
-              if (watchPath === '.git') {
+              if (isGitPath) {
                 const fileName = event.path.replace(/.*[/\\]/, '');
-                const isRelevantGitFile = this.isRelevantGitFile(fileName, this.config?.diffMode);
+                const isRelevantGitFile =
+                  this.config?.diffMode === DiffMode.REVIEW
+                    ? !event.path.endsWith('.lock')
+                    : this.isRelevantGitFile(fileName, this.config?.diffMode);
                 if (!isRelevantGitFile) {
                   continue;
                 }

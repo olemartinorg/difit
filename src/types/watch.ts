@@ -1,4 +1,5 @@
 export enum DiffMode {
+  REVIEW = 'review', // All local work and publication refs.
   DEFAULT = 'default', // HEAD^ vs HEAD
   WORKING = 'working', // staged vs working
   STAGED = 'staged', // HEAD vs staged

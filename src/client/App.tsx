@@ -12,6 +12,7 @@ import {
   type RevisionsResponse,
 } from '../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
+import { getEmptyReviewSelection } from '../utils/reviewSelection';
 import { mergeCommentThreads } from '../utils/commentImports';
 import {
   createDiffSelection,
@@ -24,6 +25,8 @@ import { Checkbox } from './components/Checkbox';
 import { CommentsDropdown } from './components/CommentsDropdown';
 import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
+import { ReviewPicker } from './components/ReviewPicker';
+import { useReviewInventory } from './hooks/useReviewInventory';
 import { DiffViewer } from './components/DiffViewer';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
@@ -553,7 +556,9 @@ function App() {
     lineIndex: number;
   } | null>(null);
   const fetchDiffDataRef = useRef<((selection?: DiffSelection) => Promise<void>) | null>(null);
+  const refreshReviewRef = useRef<(() => Promise<void>) | null>(null);
   const handleWatchReload = useCallback(async () => {
+    await refreshReviewRef.current?.();
     await fetchDiffDataRef.current?.();
   }, []);
   const handleCommentsChanged = useCallback(async () => {
@@ -704,6 +709,7 @@ function App() {
         if (requestedSelection?.baseCommitish) params.set('base', requestedSelection.baseCommitish);
         if (requestedSelection?.targetCommitish)
           params.set('target', requestedSelection.targetCommitish);
+        if (requestedSelection?.includeUntracked) params.set('includeUntracked', 'true');
         if (requestedSelection?.baseMode === 'merge-base')
           params.set('baseMode', requestedSelection.baseMode);
 
@@ -728,9 +734,10 @@ function App() {
           const requestedBase = data.requestedBaseCommitish ?? data.baseCommitish;
           const requestedTarget = data.requestedTargetCommitish ?? data.targetCommitish;
           if (requestedBase && requestedTarget) {
-            setSelectedRevision(
-              createDiffSelection(requestedBase, requestedTarget, data.requestedBaseMode),
-            );
+            setSelectedRevision({
+              ...createDiffSelection(requestedBase, requestedTarget, data.requestedBaseMode),
+              ...(data.requestedIncludeUntracked ? { includeUntracked: true } : {}),
+            });
           }
         }
 
@@ -875,7 +882,7 @@ function App() {
   const handleRevisionChange = useCallback(
     async (nextSelection: DiffSelection) => {
       // Skip if no actual change
-      if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
+      if (diffSelectionsEqual(nextSelection, selectedRevisionRef.current)) return;
 
       hasUserSelectedRevisionRef.current = true;
       selectedRevisionRef.current = nextSelection;
@@ -884,8 +891,19 @@ function App() {
       setError(null);
       await fetchDiffData(nextSelection);
     },
-    [fetchDiffData, selectedRevision],
+    [fetchDiffData],
   );
+
+  const review = useReviewInventory((selection, inventory) => {
+    const next = selection ?? getEmptyReviewSelection(inventory.head);
+    if (diffSelectionsEqual(next, selectedRevisionRef.current)) void fetchDiffData(next);
+    else void handleRevisionChange(next);
+  }, diffData?.reviewAvailable === true);
+  refreshReviewRef.current = review.refresh;
+
+  useEffect(() => {
+    if (review.inventory && shouldReload && !watchState.isReloading) reload();
+  }, [review.inventory, shouldReload, watchState.isReloading, reload]);
 
   // Clear comments and viewed files on initial load if requested via CLI flag
   const hasCleanedRef = useRef(false);
@@ -973,7 +991,7 @@ function App() {
 
   // Trigger sparkle animation when all files are viewed
   useEffect(() => {
-    if (diffData) {
+    if (diffData && diffData.files.length > 0) {
       // Reset the trigger flag when not all files are viewed
       if (viewedFiles.size < diffData.files.length) {
         setHasTriggeredSparkles(false);
@@ -1165,7 +1183,7 @@ function App() {
     });
   };
 
-  if (loading) {
+  if (loading && !diffData) {
     return (
       <div className="flex items-center justify-center h-screen bg-github-bg-primary">
         <div className="text-github-text-secondary text-base">Loading diff...</div>
@@ -1317,7 +1335,7 @@ function App() {
               )}
               <div className="flex flex-col gap-1 items-center">
                 <div className="text-xs relative">
-                  {viewedFiles.size === diffData.files.length
+                  {diffData.files.length > 0 && viewedFiles.size === diffData.files.length
                     ? 'All diffs difit-ed!'
                     : `${viewedFiles.size} / ${diffData.files.length} files viewed`}
                   <SparkleAnimation isActive={showSparkles} />
@@ -1332,10 +1350,11 @@ function App() {
                   <div
                     className="absolute top-0 right-0 h-full transition-all duration-300 ease-out"
                     style={{
-                      width: `${((diffData.files.length - viewedFiles.size) / diffData.files.length) * 100}%`,
+                      width: `${((diffData.files.length - viewedFiles.size) / Math.max(1, diffData.files.length)) * 100}%`,
                       backgroundColor: (() => {
                         const remainingPercent =
-                          ((diffData.files.length - viewedFiles.size) / diffData.files.length) *
+                          ((diffData.files.length - viewedFiles.size) /
+                            Math.max(1, diffData.files.length)) *
                           100;
                         if (remainingPercent > 50) return 'var(--color-github-accent)'; // green
                         if (remainingPercent > 20) return 'var(--color-github-warning)'; // yellow
@@ -1345,7 +1364,22 @@ function App() {
                   />
                 </div>
               </div>
-              {revisionOptions ? (
+              {review.inventory ? (
+                <ReviewPicker
+                  inventory={review.inventory}
+                  range={review.range}
+                  active={review.active}
+                  notice={review.notice}
+                  error={review.error}
+                  busy={review.busy}
+                  onSelect={review.select}
+                  onTargetChange={(target) => void review.changeTarget(target)}
+                  onAdvanced={() => {
+                    review.useAdvanced();
+                    setIsRevisionModalOpen(true);
+                  }}
+                />
+              ) : revisionOptions ? (
                 <DiffQuickMenu
                   options={revisionOptions}
                   selection={selectedRevision}
@@ -1473,8 +1507,19 @@ function App() {
 
           <main
             ref={diffScrollContainerRef}
+            aria-busy={loading}
             className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
           >
+            {diffData.files.length === 0 && (
+              <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
+                <p className="text-sm text-github-text-secondary">No changes in this comparison.</p>
+                {review.error && (
+                  <p role="alert" className="text-xs text-github-danger">
+                    {review.error}
+                  </p>
+                )}
+              </div>
+            )}
             {diffData.files.map((file, fileIndex) => {
               const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
               const mergedChunks =

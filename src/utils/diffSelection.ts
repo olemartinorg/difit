@@ -30,12 +30,13 @@ export function diffSelectionsEqual(
   return (
     left?.baseCommitish === right?.baseCommitish &&
     left?.targetCommitish === right?.targetCommitish &&
-    normalizeBaseMode(left?.baseMode) === normalizeBaseMode(right?.baseMode)
+    normalizeBaseMode(left?.baseMode) === normalizeBaseMode(right?.baseMode) &&
+    Boolean(left?.includeUntracked) === Boolean(right?.includeUntracked)
   );
 }
 
 export function getDiffSelectionKey(selection: DiffSelection): string {
-  return `${selection.baseCommitish}:${selection.targetCommitish}:${normalizeBaseMode(selection.baseMode)}`;
+  return `${selection.baseCommitish}:${selection.targetCommitish}:${normalizeBaseMode(selection.baseMode)}${selection.includeUntracked ? ':untracked' : ''}`;
 }
 
 export function getMergeBaseTargetRef(targetCommitish: string): string {
