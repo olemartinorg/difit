@@ -53,7 +53,7 @@ function SelectionCheckbox({
   checked: boolean;
   mixed: boolean;
   label: string;
-  onChange: () => void;
+  onChange: (only: boolean) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -65,7 +65,11 @@ function SelectionCheckbox({
       type="checkbox"
       checked={checked}
       aria-label={label}
-      onChange={onChange}
+      onClick={(event) => {
+        // Apply isolation after the checkbox's normal change handler.
+        if (event.detail === 3) queueMicrotask(() => onChange(true));
+      }}
+      onChange={() => onChange(false)}
       className="size-4 shrink-0 cursor-pointer accent-[var(--color-github-accent)]"
     />
   );
@@ -81,7 +85,6 @@ function CommitRow({
   onSelect: (ids: string[], only?: boolean) => void;
 }) {
   const [stats, setStats] = useState<ReviewStats>();
-  const lastPress = useRef(0);
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams({ base: commit.parent, target: commit.hash });
@@ -104,18 +107,13 @@ function CommitRow({
         checked={selected}
         mixed={false}
         label={`Select ${commit.shortHash} ${commit.message}`}
-        onChange={() => onSelect([commit.hash])}
+        onChange={(only) => onSelect([commit.hash], only)}
       />
       <button
         type="button"
         className="flex min-w-0 flex-1 items-baseline gap-2 text-left text-xs"
         title={commit.message}
-        onClick={() => {
-          const now = Date.now();
-          const only = now - lastPress.current < 450;
-          lastPress.current = only ? 0 : now;
-          onSelect([commit.hash], only);
-        }}
+        onClick={(event) => onSelect([commit.hash], event.detail === 3)}
       >
         <code className="shrink-0 text-github-text-muted">{commit.shortHash}</code>
         <span className="truncate text-github-text-primary">
@@ -123,6 +121,7 @@ function CommitRow({
           {commit.message}
         </span>
       </button>
+      <Stats stats={stats} />
       <time
         dateTime={commit.timestamp}
         title={new Date(commit.timestamp).toLocaleString()}
@@ -130,15 +129,6 @@ function CommitRow({
       >
         {relativeTime(commit.timestamp)}
       </time>
-      <Stats stats={stats} />
-      <button
-        type="button"
-        aria-label={`Show only ${commit.shortHash}`}
-        onClick={() => onSelect([commit.hash], true)}
-        className="rounded border border-github-border px-1.5 py-0.5 text-xs text-github-text-secondary hover:text-github-text-primary"
-      >
-        Only
-      </button>
     </div>
   );
 }
@@ -169,7 +159,6 @@ export function ReviewPicker({
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState({ local: true, pushed: false });
   const [visible, setVisible] = useState({ local: 20, pushed: 20 });
-  const presses = useRef<Record<string, number>>({});
   const selected = useMemo(
     () => new Set(getSelectedReviewUnits(getReviewUnits(inventory), range)),
     [inventory, range],
@@ -228,12 +217,6 @@ export function ReviewPicker({
         ]
           .filter(Boolean)
           .join(' + ');
-  const press = (key: string, ids: string[]) => {
-    const now = Date.now(),
-      only = now - (presses.current[key] ?? 0) < 450;
-    presses.current[key] = only ? 0 : now;
-    onSelect(ids, only);
-  };
   const openAdvanced = () => {
     setOpen(false);
     onAdvanced();
@@ -287,24 +270,16 @@ export function ReviewPicker({
                     checked={selected.has(WORKTREE_REVIEW_ID)}
                     mixed={false}
                     label="Select uncommitted changes"
-                    onChange={() => onSelect([WORKTREE_REVIEW_ID])}
+                    onChange={(only) => onSelect([WORKTREE_REVIEW_ID], only)}
                   />
                   <button
                     type="button"
                     className="flex-1 text-left text-sm font-medium"
-                    onClick={() => press('worktree', [WORKTREE_REVIEW_ID])}
+                    onClick={(event) => onSelect([WORKTREE_REVIEW_ID], event.detail === 3)}
                   >
                     Uncommitted changes
                   </button>
                   <Stats stats={inventory.uncommitted} />
-                  <button
-                    type="button"
-                    aria-label="Show only uncommitted changes"
-                    onClick={() => onSelect([WORKTREE_REVIEW_ID], true)}
-                    className="rounded border border-github-border px-1.5 py-0.5 text-xs text-github-text-secondary"
-                  >
-                    Only
-                  </button>
                 </div>
               )}
               {groups.map((group) => {
@@ -340,24 +315,16 @@ export function ReviewPicker({
                         checked={all}
                         mixed={!all && some}
                         label={`Select ${group.label} commits`}
-                        onChange={() => onSelect(ids)}
+                        onChange={(only) => onSelect(ids, only)}
                       />
                       <button
                         type="button"
                         className="flex-1 text-left text-sm font-medium"
-                        onClick={() => press(group.id, ids)}
+                        onClick={(event) => onSelect(ids, event.detail === 3)}
                       >
                         {ids.length} {group.label} {ids.length === 1 ? 'commit' : 'commits'}
                       </button>
                       <Stats stats={group.stats} />
-                      <button
-                        type="button"
-                        aria-label={`Show only ${group.label} commits`}
-                        onClick={() => onSelect(ids, true)}
-                        className="rounded border border-github-border px-1.5 py-0.5 text-xs text-github-text-secondary"
-                      >
-                        Only
-                      </button>
                     </div>
                     {expanded[group.id] ? (
                       <div className="pl-5">
