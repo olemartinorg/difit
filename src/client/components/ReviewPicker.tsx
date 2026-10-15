@@ -116,19 +116,22 @@ function CommitRow({
         onClick={(event) => onSelect([commit.hash], event.detail === 3)}
       >
         <code className="shrink-0 text-github-text-muted">{commit.shortHash}</code>
-        <span className="truncate text-github-text-primary">
-          {commit.isMerge ? 'Merge: ' : ''}
-          {commit.message}
+        <span className="flex min-w-0 items-baseline">
+          <span className="truncate text-github-text-primary">
+            {commit.isMerge ? 'Merge: ' : ''}
+            {commit.message}
+          </span>
+          <time
+            dateTime={commit.timestamp}
+            title={new Date(commit.timestamp).toLocaleString()}
+            className="shrink-0 whitespace-pre text-github-text-muted"
+          >
+            {' '}
+            {relativeTime(commit.timestamp)} ago
+          </time>
         </span>
       </button>
       <Stats stats={stats} />
-      <time
-        dateTime={commit.timestamp}
-        title={new Date(commit.timestamp).toLocaleString()}
-        className="shrink-0 text-xs text-github-text-muted"
-      >
-        {relativeTime(commit.timestamp)}
-      </time>
     </div>
   );
 }
