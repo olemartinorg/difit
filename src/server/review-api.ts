@@ -19,10 +19,13 @@ export class ReviewApi {
     this.inventory = new ReviewInventoryService(repositoryPath, parser);
   }
 
-  private async getInventory(target?: string) {
+  private async getInventory(target?: string, ignoreWhitespace = false) {
     const config = await readUserConfig();
     const targets = config.client.reviewTargets as Record<string, string> | undefined;
-    const inventory = await this.inventory.getInventory(target ?? targets?.[this.repositoryId]);
+    const inventory = await this.inventory.getInventory(
+      target ?? targets?.[this.repositoryId],
+      ignoreWhitespace,
+    );
     inventory.reviewByDefault = this.reviewByDefault;
     return inventory;
   }
@@ -42,6 +45,7 @@ export class ReviewApi {
       try {
         const inventory = await this.getInventory(
           typeof req.query.target === 'string' ? req.query.target : undefined,
+          req.query.ignoreWhitespace === 'true',
         );
         res.json(inventory);
       } catch (error) {
@@ -86,11 +90,14 @@ export class ReviewApi {
       }
       try {
         res.json(
-          await this.parser.getReviewStats({
-            baseCommitish: req.query.base,
-            targetCommitish: req.query.target,
-            includeUntracked: req.query.includeUntracked === 'true',
-          }),
+          await this.parser.getReviewStats(
+            {
+              baseCommitish: req.query.base,
+              targetCommitish: req.query.target,
+              includeUntracked: req.query.includeUntracked === 'true',
+            },
+            req.query.ignoreWhitespace === 'true',
+          ),
         );
       } catch (error) {
         res

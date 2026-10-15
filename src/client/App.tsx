@@ -904,11 +904,15 @@ function App() {
     [fetchDiffData],
   );
 
-  const review = useReviewInventory((selection, inventory) => {
-    const next = selection ?? getEmptyReviewSelection(inventory.head);
-    if (diffSelectionsEqual(next, selectedRevisionRef.current)) void fetchDiffData(next);
-    else void handleRevisionChange(next);
-  }, diffData?.reviewAvailable === true);
+  const review = useReviewInventory(
+    (selection, inventory) => {
+      const next = selection ?? getEmptyReviewSelection(inventory.head);
+      if (diffSelectionsEqual(next, selectedRevisionRef.current)) void fetchDiffData(next);
+      else void handleRevisionChange(next);
+    },
+    diffData?.reviewAvailable === true,
+    ignoreWhitespace,
+  );
   refreshReviewRef.current = review.refresh;
 
   useEffect(() => {
@@ -1398,6 +1402,7 @@ function App() {
                   notice={review.notice}
                   error={review.error}
                   busy={review.busy}
+                  ignoreWhitespace={ignoreWhitespace}
                   onSelect={review.select}
                   onTargetChange={(target) => void review.changeTarget(target)}
                   onAdvanced={() => {

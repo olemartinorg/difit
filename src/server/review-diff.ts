@@ -84,7 +84,7 @@ export class ReviewDiffParser extends GitDiffParser {
     return files.filter((file): file is UntrackedDiffFile => file !== null);
   }
 
-  async getReviewStats(selection: DiffSelection): Promise<ReviewStats> {
+  async getReviewStats(selection: DiffSelection, ignoreWhitespace = false): Promise<ReviewStats> {
     const validation = validateDiffArguments(selection.targetCommitish, selection.baseCommitish);
     if (!validation.valid) throw new Error(validation.error);
     const base =
@@ -105,6 +105,7 @@ export class ReviewDiffParser extends GitDiffParser {
           : [base, selection.targetCommitish];
     const raw = await this.reviewGit.diff([
       ...args,
+      ...(ignoreWhitespace ? ['-w'] : []),
       '--numstat',
       '-z',
       '--no-ext-diff',

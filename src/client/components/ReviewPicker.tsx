@@ -78,16 +78,22 @@ function SelectionCheckbox({
 function CommitRow({
   commit,
   selected,
+  ignoreWhitespace,
   onSelect,
 }: {
   commit: ReviewCommit;
   selected: boolean;
+  ignoreWhitespace: boolean;
   onSelect: (ids: string[], only?: boolean) => void;
 }) {
   const [stats, setStats] = useState<ReviewStats>();
   useEffect(() => {
     const controller = new AbortController();
-    const params = new URLSearchParams({ base: commit.parent, target: commit.hash });
+    const params = new URLSearchParams({
+      base: commit.parent,
+      target: commit.hash,
+      ignoreWhitespace: String(ignoreWhitespace),
+    });
     void fetch(`/api/review/stats?${params}`, { signal: controller.signal })
       .then(async (response) =>
         response.ok ? ((await response.json()) as ReviewStats) : undefined,
@@ -97,7 +103,7 @@ function CommitRow({
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [commit.hash, commit.parent]);
+  }, [commit.hash, commit.parent, ignoreWhitespace]);
   return (
     <div
       className="flex items-center gap-2 rounded px-2 py-2 hover:bg-github-bg-tertiary"
@@ -143,6 +149,7 @@ interface ReviewPickerProps {
   notice: string;
   error: string | null;
   busy: boolean;
+  ignoreWhitespace: boolean;
   onSelect: (ids: string[], only?: boolean) => void;
   onTargetChange: (target: string) => void;
   onAdvanced: () => void;
@@ -155,6 +162,7 @@ export function ReviewPicker({
   notice,
   error,
   busy,
+  ignoreWhitespace,
   onSelect,
   onTargetChange,
   onAdvanced,
@@ -336,6 +344,7 @@ export function ReviewPicker({
                             key={commit.hash}
                             commit={commit}
                             selected={selected.has(commit.hash)}
+                            ignoreWhitespace={ignoreWhitespace}
                             onSelect={onSelect}
                           />
                         ))}

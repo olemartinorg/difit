@@ -14,6 +14,7 @@ import {
 export function useReviewInventory(
   onSelectionChange: (selection: DiffSelection | null, inventory: ReviewInventory) => void,
   enabled: boolean,
+  ignoreWhitespace: boolean,
 ) {
   const [inventory, setInventory] = useState<ReviewInventory | null>(null);
   const [range, setRange] = useState<ReviewRange | null>(null);
@@ -50,9 +51,9 @@ export function useReviewInventory(
     const requestId = ++requestIdRef.current;
     try {
       const urlTarget = targetRef.current;
-      const response = await fetch(
-        urlTarget ? `/api/review?${new URLSearchParams({ target: urlTarget })}` : '/api/review',
-      );
+      const params = new URLSearchParams({ ignoreWhitespace: String(ignoreWhitespace) });
+      if (urlTarget) params.set('target', urlTarget);
+      const response = await fetch(`/api/review?${params}`);
       const data = (await response.json()) as ReviewInventory & { error?: string };
       if (requestId !== requestIdRef.current) return;
       if (!response.ok) throw new Error(data.error || 'Could not load changes');
@@ -90,7 +91,7 @@ export function useReviewInventory(
       if (requestId === requestIdRef.current)
         setError(cause instanceof Error ? cause.message : 'Could not load changes');
     }
-  }, [enabled, writeUrl]);
+  }, [enabled, ignoreWhitespace, writeUrl]);
 
   const cancelRequests = useCallback(() => {
     requestIdRef.current++;

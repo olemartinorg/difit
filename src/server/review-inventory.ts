@@ -18,7 +18,7 @@ export class ReviewInventoryService {
     this.parser = parser ?? new ReviewDiffParser(repoPath);
   }
 
-  async getInventory(targetOverride?: string): Promise<ReviewInventory> {
+  async getInventory(targetOverride?: string, ignoreWhitespace = false): Promise<ReviewInventory> {
     const [head, branch, refs, remotes, format] = await Promise.all([
       this.git.revparse(['HEAD']),
       this.git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => 'Detached HEAD'),
@@ -87,12 +87,18 @@ export class ReviewInventoryService {
             '--',
           ])
         : Promise.resolve(''),
-      this.parser.getReviewStats({
-        baseCommitish: head,
-        targetCommitish: '.',
-        includeUntracked: true,
-      }),
-      this.parser.getReviewStats({ baseCommitish: head, targetCommitish: 'staged' }),
+      this.parser.getReviewStats(
+        {
+          baseCommitish: head,
+          targetCommitish: '.',
+          includeUntracked: true,
+        },
+        ignoreWhitespace,
+      ),
+      this.parser.getReviewStats(
+        { baseCommitish: head, targetCommitish: 'staged' },
+        ignoreWhitespace,
+      ),
     ]);
     const localHashes = new Set(unpublished.trim().split('\n'));
     const commits: ReviewCommit[] = (target ? log.trim().split('\n').filter(Boolean) : []).map(
@@ -130,7 +136,7 @@ export class ReviewInventoryService {
         oldest = group[group.length - 1];
       if (!newest || !oldest) return undefined;
       const selection = resolveReviewRange(inventory, { oldest: oldest.hash, newest: newest.hash });
-      return selection ? this.parser.getReviewStats(selection) : undefined;
+      return selection ? this.parser.getReviewStats(selection, ignoreWhitespace) : undefined;
     };
     [inventory.localStats, inventory.pushedStats] = await Promise.all([
       groupStats(false),
