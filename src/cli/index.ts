@@ -263,7 +263,10 @@ program
         repoPath = undefined;
       }
 
-      const selection = resolveDiffSelection(commitish, compareWith, options.mergeBase);
+      const reviewByDefault = program.args.length === 0 && !options.mergeBase;
+      const selection = reviewByDefault
+        ? { baseCommitish: 'HEAD', targetCommitish: '.', includeUntracked: true }
+        : resolveDiffSelection(commitish, compareWith, options.mergeBase);
 
       if (options.mergeBase && isSpecialArg(selection.baseCommitish)) {
         console.error(
@@ -272,7 +275,10 @@ program
         process.exit(1);
       }
 
-      if (selection.targetCommitish === 'working' || selection.targetCommitish === '.') {
+      if (
+        !reviewByDefault &&
+        (selection.targetCommitish === 'working' || selection.targetCommitish === '.')
+      ) {
         const git = simpleGit(repoPath);
         if (isBackgroundChild && !options.includeUntracked) {
           // Skip interactive prompts in detached background mode.
@@ -296,6 +302,7 @@ program
         keepAlive: options.keepAlive,
         contextLines: options.context,
         diffMode: determineDiffMode(selection, compareWith),
+        reviewByDefault,
         repoPath,
         ...(commentImports.length > 0 ? { commentImports } : {}),
       });
@@ -319,7 +326,7 @@ program
         console.log('🧹 Starting with a clean slate - all existing comments will be cleared');
       }
 
-      if (isEmpty) {
+      if (isEmpty && !reviewByDefault) {
         console.log(
           '\n! \x1b[33mNo differences found. Browser will not open automatically.\x1b[0m',
         );
