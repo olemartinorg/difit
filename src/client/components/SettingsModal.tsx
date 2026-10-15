@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Settings, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useHotkeysContext } from 'react-hotkeys-hook';
@@ -39,9 +40,10 @@ interface SettingsModalProps {
   onClose: () => void;
   settings: AppearanceSettings;
   onSettingsChange: (settings: AppearanceSettings) => void;
+  reviewSection?: ReactNode;
 }
 
-type SettingsSection = 'appearance' | 'system';
+type SettingsSection = 'appearance' | 'system' | 'review';
 
 const DEFAULT_SETTINGS: AppearanceSettings = {
   fontSize: 14,
@@ -90,7 +92,17 @@ const SETTINGS_SECTIONS = [
   },
 ] as const;
 
-export function SettingsModal({ isOpen, onClose, settings, onSettingsChange }: SettingsModalProps) {
+export function SettingsModal({
+  isOpen,
+  onClose,
+  settings,
+  onSettingsChange,
+  reviewSection,
+}: SettingsModalProps) {
+  const sections = [
+    ...SETTINGS_SECTIONS,
+    ...(reviewSection ? [{ id: 'review' as const, label: 'Review' }] : []),
+  ];
   const [autoViewedPatternsInput, setAutoViewedPatternsInput] = useState(
     formatAutoViewedPatterns(settings.autoViewedPatterns),
   );
@@ -196,7 +208,7 @@ export function SettingsModal({ isOpen, onClose, settings, onSettingsChange }: S
             className="sm:w-40 border-b sm:border-b-0 sm:border-r border-github-border px-3 py-2"
           >
             <div className="flex sm:flex-col gap-1">
-              {SETTINGS_SECTIONS.map((section) => {
+              {sections.map((section) => {
                 const isActive = section.id === activeSection;
                 return (
                   <button
@@ -490,19 +502,24 @@ export function SettingsModal({ isOpen, onClose, settings, onSettingsChange }: S
                 </div>
               </div>
             )}
+            {activeSection === 'review' && reviewSection}
           </div>
         </div>
 
-        <div className="flex items-center justify-between p-4 border-t border-github-border">
-          <button
-            onClick={handleReset}
-            className="px-3 py-2 text-sm text-github-text-secondary hover:text-github-text-primary"
-          >
-            {activeSection === 'appearance' ? 'Reset Appearance Defaults' : 'Reset System Defaults'}
-          </button>
+        <div className="flex items-center justify-between gap-3 p-4 border-t border-github-border">
+          {activeSection !== 'review' && (
+            <button
+              onClick={handleReset}
+              className="px-3 py-2 text-sm text-github-text-secondary hover:text-github-text-primary"
+            >
+              {activeSection === 'appearance'
+                ? 'Reset Appearance Defaults'
+                : 'Reset System Defaults'}
+            </button>
+          )}
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm bg-github-accent text-white rounded hover:bg-green-600"
+            className="ml-auto px-4 py-2 text-sm bg-github-accent text-white rounded hover:bg-green-600"
           >
             Close
           </button>

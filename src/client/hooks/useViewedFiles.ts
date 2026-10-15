@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 import {
   type BaseMode,
@@ -25,7 +25,7 @@ interface UseViewedFilesReturn {
   setFilesViewed: (diffFiles: DiffFile[], viewed: boolean) => Promise<void>;
   isFileContentChanged: (filePath: string, diffFile: DiffFile) => Promise<boolean>;
   getViewedFileRecord: (filePath: string) => ViewedFileRecord | undefined;
-  clearViewedFiles: () => void;
+  clearViewedFiles: (currentReviewOnly?: boolean) => void;
 }
 
 export function useViewedFiles(
@@ -39,6 +39,7 @@ export function useViewedFiles(
   baseMode?: BaseMode,
 ): UseViewedFilesReturn {
   const [viewedFileRecords, setViewedFileRecords] = useState<ViewedFileRecord[]>([]);
+  const generationRef = useRef(0);
   const [loadedViewedFilesKey, setLoadedViewedFilesKey] = useState<string | null>(null);
   const [fileHashes, setFileHashes] = useState<Map<string, string>>(new Map());
   const [changedSinceViewedFiles, setChangedSinceViewedFiles] = useState<Set<string>>(new Set());
@@ -58,6 +59,7 @@ export function useViewedFiles(
     if (!baseCommitish || !targetCommitish || !viewedFilesKey) return;
 
     let cancelled = false;
+    const generation = ++generationRef.current;
 
     const loadedFiles = storageService.getViewedFiles(
       baseCommitish,
@@ -155,6 +157,7 @@ export function useViewedFiles(
         if (!cancelled) setChangedSinceViewedFiles(new Set());
       }
 
+      if (cancelled || generation !== generationRef.current) return;
       if (additions.length > 0) {
         const updatedRecords = [...loadedFiles, ...additions];
         storageService.saveViewedFiles(
@@ -198,6 +201,7 @@ export function useViewedFiles(
   const saveViewedFiles = useCallback(
     (newRecords: ViewedFileRecord[]) => {
       if (!baseCommitish || !targetCommitish) return;
+      generationRef.current++;
 
       storageService.saveViewedFiles(
         baseCommitish,
@@ -269,7 +273,9 @@ export function useViewedFiles(
         ]);
       } else {
         // File is not viewed, add it
+        const generation = generationRef.current;
         const hash = await getFileHash(diffFile);
+        if (generation !== generationRef.current) return;
         const viewedAt = new Date().toISOString();
         const newRecord: ViewedFileRecord = {
           filePath,
@@ -296,6 +302,7 @@ export function useViewedFiles(
   const setFilesViewed = useCallback(
     async (diffFiles: DiffFile[], viewed: boolean): Promise<void> => {
       if (viewed) {
+        const generation = generationRef.current;
         const filesToAdd = diffFiles.filter((file) => !getViewedFileRecord(file.path));
         if (filesToAdd.length === 0) return;
 
@@ -308,6 +315,7 @@ export function useViewedFiles(
           })),
         );
 
+        if (generation !== generationRef.current) return;
         saveViewedFiles([...viewedFileRecords, ...addedRecords]);
         storageService.recordViewedHashes(
           repositoryId,
@@ -339,12 +347,16 @@ export function useViewedFiles(
   );
 
   // Clear all viewed files
-  const clearViewedFiles = useCallback(() => {
-    saveViewedFiles([]);
-    setFileHashes(new Map());
-    setChangedSinceViewedFiles(new Set());
-    storageService.clearViewedHashIndex(repositoryId);
-  }, [saveViewedFiles, repositoryId]);
+  const clearViewedFiles = useCallback(
+    (currentReviewOnly = false) => {
+      saveViewedFiles([]);
+      setFileHashes(new Map());
+      setChangedSinceViewedFiles(new Set());
+      if (currentReviewOnly) storageService.removeViewedHashes(repositoryId, viewedFileRecords);
+      else storageService.clearViewedHashIndex(repositoryId);
+    },
+    [saveViewedFiles, repositoryId, viewedFileRecords],
+  );
 
   return {
     viewedFiles,

@@ -28,6 +28,7 @@ import { getFileExtension } from '../utils/fileUtils.js';
 import { FileWatcherService } from './file-watcher.js';
 import { ReviewDiffParser } from './review-diff.js';
 import { ReviewApi } from './review-api.js';
+import { registerReviewReset } from './review-reset.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
 
 import {
@@ -732,13 +733,14 @@ export async function startServer(
   function updateCommentSession(
     selection: DiffSelection,
     nextThreads: DiffCommentThread[],
+    force = false,
   ): boolean {
     const session = getOrCreateCommentSession(selection);
     const previous = JSON.stringify(session.threads);
     const next = JSON.stringify(nextThreads);
     session.threads = nextThreads;
 
-    if (previous === next) {
+    if (previous === next && !force) {
       return false;
     }
 
@@ -750,6 +752,12 @@ export async function startServer(
     });
     return true;
   }
+
+  registerReviewReset(app, {
+    getSelection: getCommentSelectionFromQuery,
+    getSession: getOrCreateCommentSession,
+    reset: (selection) => updateCommentSession(selection, [], true),
+  });
 
   app.post('/api/comments', (req, res) => {
     try {

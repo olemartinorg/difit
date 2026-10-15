@@ -27,6 +27,8 @@ import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { ReviewPicker } from './components/ReviewPicker';
 import { useReviewInventory } from './hooks/useReviewInventory';
+import { useReviewReset } from './hooks/useReviewReset';
+import { ReviewResetSection } from './components/ReviewResetSection';
 import { DiffViewer } from './components/DiffViewer';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
@@ -136,6 +138,7 @@ function App() {
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const reviewReset = useReviewReset();
   const [isCopiedAll, setIsCopiedAll] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -272,6 +275,7 @@ function App() {
 
   const syncThreadsToServer = useCallback(
     async (nextThreads: DiffCommentThread[]) => {
+      const generation = reviewReset.generationRef.current;
       const response = await fetch(getCommentApiUrl('/api/comments'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -293,12 +297,16 @@ function App() {
         serverCommentVersionRef.current = result.version;
       }
       // Server merged in a concurrent change; adopt it so we don't push a stale set back.
-      if (result.merged && Array.isArray(result.threads)) {
+      if (
+        generation === reviewReset.generationRef.current &&
+        result.merged &&
+        Array.isArray(result.threads)
+      ) {
         skipNextCommentSyncRef.current = true;
         replaceThreads(result.threads);
       }
     },
-    [getCommentApiUrl, replaceThreads],
+    [getCommentApiUrl, replaceThreads, reviewReset.generationRef],
   );
 
   // Viewed files management
@@ -562,8 +570,10 @@ function App() {
     await fetchDiffDataRef.current?.();
   }, []);
   const handleCommentsChanged = useCallback(async () => {
+    const generation = reviewReset.generationRef.current;
     try {
       const serverThreads = await fetchServerThreads();
+      if (generation !== reviewReset.generationRef.current) return;
       skipNextCommentSyncRef.current = true;
       replaceThreads(serverThreads);
       if (commentsContextKey) {
@@ -572,7 +582,7 @@ function App() {
     } catch (commentsError) {
       console.error('Failed to refresh comments from server:', commentsError);
     }
-  }, [commentsContextKey, fetchServerThreads, replaceThreads]);
+  }, [commentsContextKey, fetchServerThreads, replaceThreads, reviewReset.generationRef]);
 
   // File watch for reload functionality - initialize with callback
   const { shouldReload, reload, watchState } = useFileWatch(
@@ -905,6 +915,20 @@ function App() {
     if (review.inventory && shouldReload && !watchState.isReloading) reload();
   }, [review.inventory, shouldReload, watchState.isReloading, reload]);
 
+  const handleResetReview = () =>
+    reviewReset.reset(
+      getCommentApiUrl('/api/comments'),
+      () => {
+        clearAllComments();
+        clearViewedFiles(true);
+        skipNextCommentSyncRef.current = true;
+        if (commentsContextKey) setBootstrappedCommentsKey(commentsContextKey);
+      },
+      (version) => {
+        serverCommentVersionRef.current = version;
+      },
+    );
+
   // Clear comments and viewed files on initial load if requested via CLI flag
   const hasCleanedRef = useRef(false);
   useEffect(() => {
@@ -932,6 +956,7 @@ function App() {
       return;
     }
 
+    const resetGeneration = reviewReset.generationRef.current;
     const shouldReplaceFromServer = pendingBootstrapAfterLocalResetRef.current;
     pendingBootstrapAfterLocalResetRef.current = false;
 
@@ -944,7 +969,7 @@ function App() {
         const nextThreads = shouldReplaceFromServer
           ? serverThreads
           : mergeCommentThreads(serverThreads, threads).threads;
-        if (cancelled) {
+        if (cancelled || resetGeneration !== reviewReset.generationRef.current) {
           return;
         }
 
@@ -987,6 +1012,7 @@ function App() {
     replaceThreads,
     syncThreadsToServer,
     threads,
+    reviewReset.generationRef,
   ]);
 
   // Trigger sparkle animation when all files are viewed
@@ -1627,6 +1653,18 @@ function App() {
             onClose={() => setIsSettingsOpen(false)}
             settings={settings}
             onSettingsChange={updateSettings}
+            reviewSection={
+              <ReviewResetSection
+                onReset={() => void handleResetReview()}
+                disabled={
+                  !resolvedSelection ||
+                  diffData.files.length === 0 ||
+                  !hasLoadedInitialViewedFiles ||
+                  !hasBootstrappedComments
+                }
+                error={reviewReset.error}
+              />
+            }
           />
         )}
 
