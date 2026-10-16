@@ -17,7 +17,7 @@ import {
 import { useFileLevelTokensLookup } from '../contexts/FileLevelTokensContext';
 
 import { CommentButton } from './CommentButton';
-import { CommentForm } from './CommentForm';
+import { LineCommentForm as CommentForm, useCommentingLine } from './LiveCommentDraft';
 import { CommentThreadCard } from './CommentThreadCard';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { OpenInEditorButton } from './OpenInEditorButton';
@@ -164,10 +164,7 @@ export function SideBySideDiffChunk({
   const [startLine, setStartLine] = useState<LineSelection | null>(null);
   const [endLine, setEndLine] = useState<LineSelection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [commentingLine, setCommentingLine] = useState<{
-    side: DiffSide;
-    lineNumber: LineNumber;
-  } | null>(null);
+  const [commentingLine, setCommentingLine] = useCommentingLine();
   const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
 
@@ -183,7 +180,7 @@ export function SideBySideDiffChunk({
         }
       }
     }
-  }, [commentTrigger, chunk.lines, onCommentTriggerHandled]);
+  }, [commentTrigger, chunk.lines, onCommentTriggerHandled, setCommentingLine]);
 
   const handleAddComment = useCallback(
     (side: DiffSide, lineNumber: LineNumber) => {
@@ -193,7 +190,7 @@ export function SideBySideDiffChunk({
         setCommentingLine({ side, lineNumber });
       }
     },
-    [commentingLine],
+    [commentingLine, setCommentingLine],
   );
 
   const getCommentLineFromAnchor = (selection: LineSelection): LineNumber => {
@@ -294,7 +291,7 @@ export function SideBySideDiffChunk({
 
   const handleCancelComment = useCallback(() => {
     setCommentingLine(null);
-  }, []);
+  }, [setCommentingLine]);
 
   // Get the code content for the selected lines (for suggestion feature)
   const getSelectedCodeContent = useCallback((): string => {
@@ -328,7 +325,7 @@ export function SideBySideDiffChunk({
         setCommentingLine(null);
       }
     },
-    [commentingLine, onAddComment, getSelectedCodeContent],
+    [commentingLine, onAddComment, getSelectedCodeContent, setCommentingLine],
   );
 
   const getProcomputedTokens = useCallback(

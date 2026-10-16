@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { DiffChunk } from '../components/DiffChunk';
+import { LiveCommentDraftProvider } from '../components/LiveCommentDraft';
 import { ExpandButton } from '../components/ExpandButton';
 
 import type { DiffViewerBodyProps } from './types';
@@ -81,7 +82,13 @@ export function TextDiffViewer({
   };
 
   return (
-    <>
+    <LiveCommentDraftProvider
+      file={file}
+      chunks={mergedChunks}
+      onAddComment={onAddComment}
+      syntaxTheme={syntaxTheme}
+      diffMode={diffMode}
+    >
       {mergedChunks.map((mergedChunk, mergedIndex) => {
         const isFirstMerged = mergedIndex === 0;
         const isLastMerged = mergedIndex === mergedChunks.length - 1;
@@ -130,6 +137,6 @@ export function TextDiffViewer({
           </React.Fragment>
         );
       })}
-    </>
+    </LiveCommentDraftProvider>
   );
 }

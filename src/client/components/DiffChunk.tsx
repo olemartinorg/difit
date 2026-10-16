@@ -17,7 +17,7 @@ import {
   type DiffSegment,
 } from '../utils/wordLevelDiff';
 
-import { CommentForm } from './CommentForm';
+import { LineCommentForm as CommentForm, useCommentingLine } from './LiveCommentDraft';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
 import type { AppearanceSettings } from './SettingsModal';
@@ -84,10 +84,7 @@ export const DiffChunk = memo(function DiffChunk({
   const [endLine, setEndLine] = useState<number | null>(null);
   const [dragSide, setDragSide] = useState<DiffSide | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [commentingLine, setCommentingLine] = useState<{
-    side: DiffSide;
-    lineNumber: LineNumber;
-  } | null>(null);
+  const [commentingLine, setCommentingLine] = useCommentingLine();
   const [selectionAnchor, setSelectionAnchor] = useState<{
     side: DiffSide;
     lineNumber: number;
@@ -96,7 +93,7 @@ export const DiffChunk = memo(function DiffChunk({
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
-    if (commentTrigger?.lineIndex !== undefined) {
+    if (mode !== 'split' && commentTrigger?.lineIndex !== undefined) {
       const line = chunk.lines[commentTrigger.lineIndex];
       if (line) {
         const lineNumber = line.newLineNumber || line.oldLineNumber;
@@ -107,7 +104,7 @@ export const DiffChunk = memo(function DiffChunk({
         }
       }
     }
-  }, [commentTrigger, chunk.lines, onCommentTriggerHandled]);
+  }, [mode, commentTrigger, chunk.lines, onCommentTriggerHandled, setCommentingLine]);
 
   const handleAddComment = useCallback(
     (side: DiffSide, lineNumber: LineNumber) => {
@@ -117,7 +114,7 @@ export const DiffChunk = memo(function DiffChunk({
         setCommentingLine({ side, lineNumber });
       }
     },
-    [commentingLine],
+    [commentingLine, setCommentingLine],
   );
 
   const getCommentLineFromAnchor = (selection: LineSelection): LineNumber => {
@@ -221,7 +218,7 @@ export const DiffChunk = memo(function DiffChunk({
 
   const handleCancelComment = useCallback(() => {
     setCommentingLine(null);
-  }, []);
+  }, [setCommentingLine]);
 
   // Get the code content for the selected lines (for suggestion feature)
   const getSelectedCodeContent = useCallback((): string => {
@@ -255,7 +252,7 @@ export const DiffChunk = memo(function DiffChunk({
         setCommentingLine(null);
       }
     },
-    [commentingLine, onAddComment, getSelectedCodeContent],
+    [commentingLine, onAddComment, getSelectedCodeContent, setCommentingLine],
   );
 
   const getThreadsForLine = (lineNumber: number, side: DiffSide) => {
