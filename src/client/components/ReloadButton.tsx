@@ -17,10 +17,6 @@ export function ReloadButton({
   className = '',
   compact = false,
 }: ReloadButtonProps) {
-  if (!shouldReload) {
-    return null;
-  }
-
   const getChangeMessage = () => {
     switch (changeType) {
       case 'commit':
@@ -37,9 +33,11 @@ export function ReloadButton({
   return (
     <button
       onClick={onReload}
-      disabled={isReloading}
+      disabled={isReloading || !shouldReload}
+      aria-hidden={!shouldReload}
+      tabIndex={shouldReload ? 0 : -1}
       className={`
-        flex items-center gap-1.5 text-xs rounded-md border ${className} ${
+        flex items-center gap-1.5 text-xs rounded-md border ${!shouldReload ? 'invisible pointer-events-none' : ''} ${className} ${
           compact ? 'px-2 py-2' : 'px-3 py-1.5'
         }
         ${

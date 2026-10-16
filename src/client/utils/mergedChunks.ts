@@ -4,6 +4,7 @@ import { type MergedChunk } from '../hooks/useExpandedLines';
 interface MergedChunksState {
   diffVersion: number | null;
   byFile: Map<string, MergedChunk[]>;
+  sourceFiles?: Map<string, DiffFile>;
 }
 
 export const EMPTY_MERGED_CHUNKS_STATE: MergedChunksState = {
@@ -28,6 +29,7 @@ export function buildMergedChunksState(
   return {
     diffVersion,
     byFile: next,
+    sourceFiles: filesByPath,
   };
 }
 
@@ -35,8 +37,9 @@ export function getMergedChunksForVersion(
   state: MergedChunksState,
   diffVersion: number,
   filePath: string,
+  file?: DiffFile,
 ): MergedChunk[] | undefined {
-  if (state.diffVersion !== diffVersion) {
+  if (state.diffVersion !== diffVersion && (!file || state.sourceFiles?.get(filePath) !== file)) {
     return undefined;
   }
 

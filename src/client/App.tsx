@@ -27,9 +27,10 @@ import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { ReviewPicker } from './components/ReviewPicker';
 import { useReviewInventory } from './hooks/useReviewInventory';
+import { useReviewSettings } from './hooks/useReviewSettings';
+import { ReviewSettingsSection } from './components/ReviewSettingsSection';
+import { getInitialMergedChunks, reconcileDiffResponse } from './utils/stableDiff';
 import { useReviewReset } from './hooks/useReviewReset';
-import { matchesAutoViewedPatterns } from './utils/autoViewedPatterns';
-import { ResetViewedButton } from './components/ResetViewedButton';
 import { DiffViewer } from './components/DiffViewer';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
@@ -42,7 +43,7 @@ import { SparkleAnimation } from './components/SparkleAnimation';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
-import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
+import { useExpandedLines } from './hooks/useExpandedLines';
 import { useFileWatch } from './hooks/useFileWatch';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLazyDiffRendering } from './hooks/useLazyDiffRendering';
@@ -51,6 +52,8 @@ import { useViewport } from './hooks/useViewport';
 import { fetchClientSettings, saveClientSettings } from './services/userSettings';
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
+import { matchesAutoViewedPatterns } from './utils/autoViewedPatterns';
+import { ResetViewedButton } from './components/ResetViewedButton';
 import { getFileElementId } from './utils/domUtils';
 import { findCommentPosition } from './utils/navigation/positionHelpers';
 import { resolveEventSourceUrl } from './utils/eventSourceUrl';
@@ -62,7 +65,6 @@ import {
 import { buildFileLineIndex, isThreadOutdated } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
-const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
 const DIFF_VIEW_MODE_STORAGE_KEY = 'difit.diffViewMode';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'difit.sidebarWidth';
 const SIDEBAR_OPEN_STORAGE_KEY = 'difit.sidebarOpen';
@@ -134,6 +136,8 @@ const getInitialFileTreeOpen = () => getStoredSidebarOpen() ?? true;
 
 function App() {
   const [diffData, setDiffData] = useState<DiffResponse | null>(null);
+  const diffDataRef = useRef(diffData);
+  diffDataRef.current = diffData;
   const [diffDataVersion, setDiffDataVersion] = useState(0);
   const [diffMode, setDiffMode] = useState<DiffViewMode>(getInitialDiffViewMode);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(true);
@@ -141,6 +145,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const reviewReset = useReviewReset();
   const [isCopiedAll, setIsCopiedAll] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
@@ -187,6 +192,7 @@ function App() {
   }, [resolvedSelection]);
 
   const { settings, updateSettings } = useAppearanceSettings();
+  const { settings: reviewSettings, updateSettings: updateReviewSettings } = useReviewSettings();
   const { isMobile, isDesktop } = useViewport();
 
   // New diff-aware comment system
@@ -498,6 +504,7 @@ function App() {
     baseCommitish: diffData?.baseCommitish,
     targetCommitish: diffData?.targetCommitish,
     diffIdentity: diffDataVersion,
+    files: diffData?.files,
   });
 
   const getMergedChunksRef = useRef(getMergedChunks);
@@ -534,7 +541,8 @@ function App() {
     return diffData.files.map((file) => ({
       ...file,
       chunks:
-        getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path) || file.chunks,
+        getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path, file) ||
+        file.chunks,
     }));
   }, [diffData, diffDataVersion, mergedChunksState]);
 
@@ -588,10 +596,10 @@ function App() {
     lineIndex: number;
   } | null>(null);
   const fetchDiffDataRef = useRef<((selection?: DiffSelection) => Promise<void>) | null>(null);
-  const refreshReviewRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshReviewRef = useRef<(() => Promise<boolean | undefined>) | null>(null);
   const handleWatchReload = useCallback(async () => {
-    await refreshReviewRef.current?.();
-    await fetchDiffDataRef.current?.();
+    const handled = await refreshReviewRef.current?.();
+    if (!handled) await fetchDiffDataRef.current?.();
   }, []);
   const handleCommentsChanged = useCallback(async () => {
     const generation = reviewReset.generationRef.current;
@@ -609,10 +617,12 @@ function App() {
   }, [commentsContextKey, fetchServerThreads, replaceThreads, reviewReset.generationRef]);
 
   // File watch for reload functionality - initialize with callback
-  const { shouldReload, reload, watchState } = useFileWatch(
-    handleWatchReload,
-    handleCommentsChanged,
-  );
+  const {
+    shouldReload,
+    reload,
+    watchState,
+    error: watchError,
+  } = useFileWatch(handleWatchReload, handleCommentsChanged);
 
   // Track which file the mouse is over so `v` works without a cursor
   const hoveredFileIndexRef = useRef<number | null>(null);
@@ -755,8 +765,14 @@ function App() {
         if (diffRequestIdRef.current !== requestId) {
           return;
         }
-        setDiffData(data);
-        setDiffDataVersion((prev) => prev + 1);
+        const next = reconcileDiffResponse(diffDataRef.current, data);
+        if (next !== diffDataRef.current) {
+          diffDataRef.current = next;
+          setDiffData(next);
+          setDiffDataVersion((prev) => prev + 1);
+        }
+        setError(null);
+        setRefreshError(null);
 
         // Update resolved revision state from server response
         setResolvedBaseRevision(
@@ -783,7 +799,9 @@ function App() {
         if (diffRequestIdRef.current !== requestId) {
           return;
         }
-        setError(err instanceof Error ? err.message : 'Unknown error');
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        if (diffDataRef.current) setRefreshError(message);
+        else setError(message);
       } finally {
         if (activeDiffAbortControllerRef.current === controller) {
           activeDiffAbortControllerRef.current = null;
@@ -914,14 +932,14 @@ function App() {
 
   // Handle revision change
   const handleRevisionChange = useCallback(
-    async (nextSelection: DiffSelection) => {
+    async (nextSelection: DiffSelection, background = false) => {
       // Skip if no actual change
       if (diffSelectionsEqual(nextSelection, selectedRevisionRef.current)) return;
 
       hasUserSelectedRevisionRef.current = true;
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
-      setLoading(true);
+      if (!background) setLoading(true);
       setError(null);
       await fetchDiffData(nextSelection);
     },
@@ -929,19 +947,34 @@ function App() {
   );
 
   const review = useReviewInventory(
-    (selection, inventory) => {
+    async (selection, inventory, background) => {
       const next = selection ?? getEmptyReviewSelection(inventory.head);
-      if (diffSelectionsEqual(next, selectedRevisionRef.current)) void fetchDiffData(next);
-      else void handleRevisionChange(next);
+      if (diffSelectionsEqual(next, selectedRevisionRef.current)) await fetchDiffData(next);
+      else await handleRevisionChange(next, background);
     },
     diffData?.reviewAvailable === true,
     ignoreWhitespace,
+    reviewSettings.autoRefresh,
   );
   refreshReviewRef.current = review.refresh;
 
   useEffect(() => {
-    if (review.inventory && shouldReload && !watchState.isReloading) reload();
-  }, [review.inventory, shouldReload, watchState.isReloading, reload]);
+    if (
+      review.inventory &&
+      reviewSettings.autoRefresh &&
+      shouldReload &&
+      !watchState.isReloading &&
+      !watchError
+    )
+      reload();
+  }, [
+    review.inventory,
+    reviewSettings.autoRefresh,
+    shouldReload,
+    watchState.isReloading,
+    watchError,
+    reload,
+  ]);
 
   // Clear comments and viewed files on initial load if requested via CLI flag
   const hasCleanedRef = useRef(false);
@@ -1351,13 +1384,20 @@ function App() {
                 title={ignoreWhitespace ? 'Show whitespace changes' : 'Ignore whitespace changes'}
               />
               {/* File Watch Reload Button */}
-              <ReloadButton
-                shouldReload={shouldReload}
-                isReloading={watchState.isReloading}
-                onReload={reload}
-                changeType={watchState.lastChangeType}
-                compact={isMobile}
-              />
+              {(!review.inventory || !reviewSettings.autoRefresh || watchError || refreshError) && (
+                <ReloadButton
+                  shouldReload={shouldReload || refreshError !== null}
+                  isReloading={watchState.isReloading}
+                  onReload={reload}
+                  changeType={watchState.lastChangeType}
+                  compact={isMobile}
+                />
+              )}
+              {(watchError || refreshError) && (
+                <span role="alert" className="text-xs text-github-danger">
+                  {watchError || refreshError}
+                </span>
+              )}
             </div>
             <div
               className={`flex flex-wrap items-center text-sm text-github-text-secondary ${
@@ -1570,8 +1610,8 @@ function App() {
             {diffData.files.map((file, fileIndex) => {
               const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
               const mergedChunks =
-                getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path) ??
-                EMPTY_MERGED_CHUNKS;
+                getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path, file) ??
+                getInitialMergedChunks(file);
               const isRendered = renderedFilePaths.has(file.path);
               return (
                 <div
@@ -1674,6 +1714,9 @@ function App() {
             onClose={() => setIsSettingsOpen(false)}
             settings={settings}
             onSettingsChange={updateSettings}
+            reviewSection={
+              <ReviewSettingsSection settings={reviewSettings} onChange={updateReviewSettings} />
+            }
           />
         )}
 

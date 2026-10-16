@@ -15,6 +15,8 @@ export function useFileWatch(
   onReload?: () => Promise<void>,
   onCommentsChanged?: () => Promise<void>,
 ): FileWatchHook {
+  const changeSequenceRef = useRef(0);
+  const reloadingRef = useRef(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -68,6 +70,7 @@ export function useFileWatch(
               break;
 
             case 'reload':
+              changeSequenceRef.current++;
               console.log('File changes detected, showing reload button:', data.changeType);
               setWatchState((prev) => ({
                 ...prev,
@@ -134,10 +137,13 @@ export function useFileWatch(
   }, [maxReconnectAttempts, onCommentsChanged, reconnectDelay]);
 
   const handleReload = useCallback(async () => {
-    if (watchState.isReloading) {
+    if (reloadingRef.current) {
       return; // Already reloading
     }
 
+    reloadingRef.current = true;
+    const sequence = changeSequenceRef.current;
+    setError(null);
     setWatchState((prev) => ({
       ...prev,
       isReloading: true,
@@ -151,10 +157,10 @@ export function useFileWatch(
       // Reset reload state after successful reload
       setWatchState((prev) => ({
         ...prev,
-        shouldReload: false,
+        shouldReload: changeSequenceRef.current !== sequence,
         isReloading: false,
-        lastChangeTime: null,
-        lastChangeType: null,
+        lastChangeTime: changeSequenceRef.current === sequence ? null : prev.lastChangeTime,
+        lastChangeType: changeSequenceRef.current === sequence ? null : prev.lastChangeType,
       }));
     } catch (reloadError) {
       console.error('Reload failed:', reloadError);
@@ -164,8 +170,10 @@ export function useFileWatch(
         ...prev,
         isReloading: false,
       }));
+    } finally {
+      reloadingRef.current = false;
     }
-  }, [onReload, watchState.isReloading]);
+  }, [onReload]);
 
   const cleanup = () => {
     if (eventSourceRef.current) {

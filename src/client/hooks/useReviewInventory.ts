@@ -12,9 +12,14 @@ import {
 } from '../../utils/reviewSelection';
 
 export function useReviewInventory(
-  onSelectionChange: (selection: DiffSelection | null, inventory: ReviewInventory) => void,
+  onSelectionChange: (
+    selection: DiffSelection | null,
+    inventory: ReviewInventory,
+    background: boolean,
+  ) => void | Promise<void>,
   enabled: boolean,
   ignoreWhitespace: boolean,
+  autoRefresh = true,
 ) {
   const [inventory, setInventory] = useState<ReviewInventory | null>(null);
   const [range, setRange] = useState<ReviewRange | null>(null);
@@ -47,7 +52,7 @@ export function useReviewInventory(
   onChangeRef.current = onSelectionChange;
 
   const refresh = useCallback(async () => {
-    if (!enabled) return;
+    if (!enabled) return false;
     const requestId = ++requestIdRef.current;
     try {
       const urlTarget = targetRef.current;
@@ -55,7 +60,7 @@ export function useReviewInventory(
       if (urlTarget) params.set('target', urlTarget);
       const response = await fetch(`/api/review?${params}`);
       const data = (await response.json()) as ReviewInventory & { error?: string };
-      if (requestId !== requestIdRef.current) return;
+      if (requestId !== requestIdRef.current) return activeRef.current;
       if (!response.ok) throw new Error(data.error || 'Could not load changes');
       if (!Array.isArray(data.commits) || !Array.isArray(data.targetOptions)) return;
       const previous = inventoryRef.current;
@@ -81,15 +86,22 @@ export function useReviewInventory(
       }
       inventoryRef.current = data;
       rangeRef.current = nextRange;
-      setInventory(data);
+      setInventory((current) =>
+        JSON.stringify(current) === JSON.stringify(data) ? current : data,
+      );
       setRange(nextRange);
       setActive(activeRef.current);
       setError(null);
       if (activeRef.current && customizedRef.current) writeUrl(nextRange, data.target);
-      if (activeRef.current) onChangeRef.current(resolveReviewRange(data, nextRange), data);
+      if (activeRef.current) {
+        await onChangeRef.current(resolveReviewRange(data, nextRange), data, true);
+        return true;
+      }
+      return false;
     } catch (cause) {
       if (requestId === requestIdRef.current)
         setError(cause instanceof Error ? cause.message : 'Could not load changes');
+      throw cause;
     }
   }, [enabled, ignoreWhitespace, writeUrl]);
 
@@ -99,16 +111,18 @@ export function useReviewInventory(
 
   useEffect(() => {
     if (!enabled) return;
-    void refresh();
+    void refresh().catch(() => {});
+    return cancelRequests;
+  }, [enabled, refresh, cancelRequests]);
+
+  useEffect(() => {
+    if (!enabled || !autoRefresh) return;
     const onFocus = () => {
-      void refresh();
+      void refresh().catch(() => {});
     };
     window.addEventListener('focus', onFocus);
-    return () => {
-      cancelRequests();
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [enabled, refresh, cancelRequests]);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [enabled, autoRefresh, refresh]);
 
   const select = useCallback(
     (ids: string[], only = false) => {
@@ -138,7 +152,7 @@ export function useReviewInventory(
       setRange(nextRange);
       setActive(true);
       writeUrl(nextRange, current.target);
-      onChangeRef.current(resolveReviewRange(current, nextRange), current);
+      void onChangeRef.current(resolveReviewRange(current, nextRange), current, false);
     },
     [writeUrl],
   );

@@ -14,6 +14,7 @@ interface UseExpandedLinesOptions {
   baseCommitish?: string;
   targetCommitish?: string;
   diffIdentity?: string | number;
+  files?: DiffFile[];
 }
 
 export interface MergedChunk extends DiffChunk {
@@ -87,6 +88,7 @@ export function useExpandedLines({
   baseCommitish,
   targetCommitish,
   diffIdentity,
+  files,
 }: UseExpandedLinesOptions): UseExpandedLinesResult {
   const isStdinDiff = baseCommitish === 'stdin' || targetCommitish === 'stdin';
   const [expandedState, setExpandedState] = useState<ExpandedLinesState>({});
@@ -100,15 +102,28 @@ export function useExpandedLines({
   expandedStateRef.current = expandedState;
   const revisionGenerationRef = useRef(0);
 
+  const previousFilesRef = useRef(new Map<string, DiffFile>());
+  const previousContextRef = useRef('');
   useEffect(() => {
     revisionGenerationRef.current += 1;
     pendingFetchesRef.current.clear();
-    expandedStateRef.current = {};
-    setExpandedState({});
+    const context = `${baseCommitish ?? ''}\0${targetCommitish ?? ''}`;
+    const retained: ExpandedLinesState = {};
+    if (files && previousContextRef.current === context) {
+      for (const file of files) {
+        const expanded = expandedStateRef.current[file.path];
+        if (expanded && previousFilesRef.current.get(file.path)?.chunks === file.chunks)
+          retained[file.path] = expanded;
+      }
+    }
+    previousContextRef.current = context;
+    previousFilesRef.current = new Map(files?.map((file) => [file.path, file]));
+    expandedStateRef.current = retained;
+    setExpandedState(retained);
     setIsLoading(false);
     setLastUpdatedFilePath(null);
     setLastUpdatedAt(0);
-  }, [baseCommitish, targetCommitish, diffIdentity]);
+  }, [baseCommitish, targetCommitish, diffIdentity, files]);
 
   const ensureFileContent = useCallback(
     async (file: DiffFile): Promise<FileExpandedState | null> => {
