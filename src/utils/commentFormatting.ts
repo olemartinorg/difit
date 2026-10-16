@@ -150,6 +150,7 @@ export function formatCommentThreadPrompt(thread: CommentThread): string {
 export function formatAllCommentThreadsPrompt(
   threads: CommentThread[],
   context?: CommentPromptDiffContext,
+  separator = '\n=====\n',
 ): string {
   if (threads.length === 0) return '';
 
@@ -161,7 +162,7 @@ export function formatAllCommentThreadsPrompt(
     }
   }
 
-  return sections.join('\n=====\n');
+  return sections.join(separator);
 }
 
 export function formatCommentsOutput(input: Comment[] | CommentThread[]): string {

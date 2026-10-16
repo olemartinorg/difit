@@ -11,6 +11,8 @@ interface CommentsDropdownProps {
   onViewAll?: () => void;
   direction?: 'down' | 'up';
   compact?: boolean;
+  pending?: boolean;
+  disabled?: boolean;
 }
 
 export function CommentsDropdown({
@@ -21,6 +23,8 @@ export function CommentsDropdown({
   onViewAll,
   direction = 'down',
   compact = false,
+  pending = false,
+  disabled = false,
 }: CommentsDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -44,19 +48,22 @@ export function CommentsDropdown({
     setIsOpen(false);
   };
 
-  const copyLabel = isCompact
-    ? isCopiedAll
-      ? 'Copied'
-      : `Copy All (${commentsCount})`
-    : isCopiedAll
-      ? 'Copied All!'
-      : `Copy All Prompt (${commentsCount})`;
+  const copyLabel = pending
+    ? 'Copying…'
+    : isCompact
+      ? isCopiedAll
+        ? 'Copied'
+        : `Copy All (${commentsCount})`
+      : isCopiedAll
+        ? 'Copied All!'
+        : `Copy All Prompt (${commentsCount})`;
 
   return (
     <div className="relative" ref={dropdownRef}>
       <div className="flex">
         <button
           onClick={handleCopyAll}
+          disabled={disabled || pending}
           className={`text-xs px-3 py-1.5 pr-2 rounded-l transition-all flex items-center gap-1.5 ${
             isCompact ? 'whitespace-normal' : 'whitespace-nowrap'
           }`}

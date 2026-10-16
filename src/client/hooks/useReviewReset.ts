@@ -1,6 +1,10 @@
-import { useRef } from 'react';
+import { useCallback, useRef } from 'react';
 
 export function useReviewReset() {
   const generationRef = useRef(0);
-  return { generationRef };
+  const invalidate = useCallback(() => {
+    generationRef.current++;
+  }, []);
+
+  return { generationRef, invalidate };
 }

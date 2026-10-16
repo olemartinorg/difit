@@ -51,7 +51,7 @@ import { useViewedFiles } from './hooks/useViewedFiles';
 import { useViewport } from './hooks/useViewport';
 import { fetchClientSettings, saveClientSettings } from './services/userSettings';
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
-import { copyTextToClipboard } from './utils/clipboard';
+import { useReviewExport } from './hooks/useReviewExport';
 import { matchesAutoViewedPatterns } from './utils/autoViewedPatterns';
 import { ResetViewedButton } from './components/ResetViewedButton';
 import { getFileElementId } from './utils/domUtils';
@@ -144,7 +144,6 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const reviewReset = useReviewReset();
-  const [isCopiedAll, setIsCopiedAll] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -217,7 +216,6 @@ function App() {
     resolvedSelection?.baseMode,
   );
 
-  const showMobileCommentsBar = isMobile && threads.length > 0;
   const commentsContextKey = useMemo(() => {
     if (!resolvedSelectionKey) {
       return null;
@@ -357,6 +355,27 @@ function App() {
       ),
     );
   };
+
+  const reviewExport = useReviewExport({
+    diff: diffData,
+    resolvedSelection,
+    threads,
+    settings: reviewSettings,
+    ready: hasBootstrappedComments,
+    commentsUrl: getCommentApiUrl('/api/comments'),
+    commentVersion: serverCommentVersionRef.current,
+    generatePrompt: generateAllCommentsPrompt,
+    resetViewed: resetViewedProgress,
+    clearComments: (version) => {
+      serverCommentVersionRef.current = version;
+      reviewReset.invalidate();
+      skipNextCommentSyncRef.current = true;
+      clearAllComments();
+    },
+  });
+  const isCopiedAll = reviewExport.succeeded;
+  const handleCopyAllComments = reviewExport.exportReview;
+  const showMobileCommentsBar = isMobile && (threads.length > 0 || reviewExport.error !== null);
 
   // Reset initialization flag when diff context changes
   useEffect(() => {
@@ -1162,23 +1181,6 @@ function App() {
     [addThread],
   );
 
-  const handleCopyAllComments = async () => {
-    try {
-      const prompt = generateAllCommentsPrompt({
-        requestedBaseCommitish: diffData?.requestedBaseCommitish,
-        requestedTargetCommitish: diffData?.requestedTargetCommitish,
-        baseMode: normalizeBaseMode(diffData?.requestedBaseMode),
-        resolvedBaseCommitish: diffData?.baseCommitish,
-        resolvedTargetCommitish: diffData?.targetCommitish,
-      });
-      await copyTextToClipboard(prompt);
-      setIsCopiedAll(true);
-      setTimeout(() => setIsCopiedAll(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy all comments prompt:', error);
-    }
-  };
-
   const handleReplyToThread = useCallback(
     (threadId: string, body: string): Promise<void> => {
       replyToThread({ threadId, body });
@@ -1408,10 +1410,19 @@ function App() {
                 <CommentsDropdown
                   commentsCount={threads.length}
                   isCopiedAll={isCopiedAll}
+                  pending={reviewExport.pending}
+                  disabled={
+                    !hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')
+                  }
                   onCopyAll={handleCopyAllComments}
                   onDeleteAll={clearAllComments}
                   onViewAll={() => setIsCommentsListOpen(true)}
                 />
+              )}
+              {!isMobile && reviewExport.error && (
+                <span role="alert" className="text-xs text-github-danger max-w-64">
+                  {reviewExport.error}
+                </span>
               )}
               <div className="flex flex-col gap-1 items-center">
                 <div className="text-xs relative">
@@ -1696,9 +1707,16 @@ function App() {
 
         {showMobileCommentsBar && (
           <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
+            {reviewExport.error && (
+              <span role="alert" className="text-xs text-github-danger mr-3">
+                {reviewExport.error}
+              </span>
+            )}
             <CommentsDropdown
               commentsCount={threads.length}
               isCopiedAll={isCopiedAll}
+              pending={reviewExport.pending}
+              disabled={!hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')}
               onCopyAll={handleCopyAllComments}
               onDeleteAll={clearAllComments}
               onViewAll={() => setIsCommentsListOpen(true)}
@@ -1715,7 +1733,11 @@ function App() {
             settings={settings}
             onSettingsChange={updateSettings}
             reviewSection={
-              <ReviewSettingsSection settings={reviewSettings} onChange={updateReviewSettings} />
+              <ReviewSettingsSection
+                settings={reviewSettings}
+                onChange={updateReviewSettings}
+                review={reviewExport.prompt}
+              />
             }
           />
         )}

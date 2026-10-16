@@ -19,6 +19,14 @@ export function registerReviewReset(
 
   app.delete('/api/comments', (req, res) => {
     const selection = sessions.getSelection(req.query as Record<string, unknown>);
+    const { threads } = (req.body ?? {}) as { threads?: unknown };
+    if (
+      threads !== undefined &&
+      JSON.stringify(threads) !== JSON.stringify(sessions.getSession(selection).threads)
+    ) {
+      res.status(409).json({ error: 'Comments changed since export. They have been kept.' });
+      return;
+    }
     sessions.reset(selection);
     const session = sessions.getSession(selection);
     resetVersions.set(session, session.version);

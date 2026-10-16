@@ -49,7 +49,7 @@ interface UseDiffCommentsReturn {
   applyCommentImports: (imports: CommentImport[], importId: string) => string[];
   generatePrompt: (commentId: string) => string;
   generateThreadPrompt: (threadId: string) => string;
-  generateAllCommentsPrompt: (context?: CommentPromptDiffContext) => string;
+  generateAllCommentsPrompt: (context?: CommentPromptDiffContext, separator?: string) => string;
 }
 
 function normalizeThread(thread: DiffCommentThread): CommentThread {
@@ -439,8 +439,8 @@ export function useDiffComments(
   );
 
   const generateAllCommentsPrompt = useCallback(
-    (context?: CommentPromptDiffContext): string => {
-      return formatAllCommentThreadsPrompt(threads.map(normalizeThread), context);
+    (context?: CommentPromptDiffContext, separator?: string): string => {
+      return formatAllCommentThreadsPrompt(threads.map(normalizeThread), context, separator);
     },
     [threads],
   );
