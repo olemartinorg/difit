@@ -90,6 +90,7 @@ export function registerReviewHandoff(
         ignoreWhitespace: body.ignoreWhitespace === true,
         threads: options.parseThreads(body),
         text: body.text,
+        ...(body.hostContext === undefined ? {} : { hostContext: body.hostContext }),
       };
       pending = { snapshot, response: res, claimed: false };
       // Keep the browser request open until the receiver has written the review to stdout.
