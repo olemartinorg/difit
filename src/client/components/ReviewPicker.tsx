@@ -106,7 +106,7 @@ function CommitRow({
   }, [commit.hash, commit.parent, ignoreWhitespace]);
   return (
     <div
-      className="flex items-center gap-2 rounded px-2 py-2 hover:bg-github-bg-tertiary"
+      className="flex items-center gap-2 rounded pl-2 py-2 hover:bg-github-bg-tertiary"
       data-review-commit={commit.hash}
     >
       <SelectionCheckbox
