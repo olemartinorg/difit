@@ -20,6 +20,7 @@ import {
   readStdin,
 } from './utils.js';
 import { createCommentCommand } from './comment.js';
+import { createReviewCommand } from './review.js';
 import { getPrPatch, getPrCommentImports } from './github.js';
 import {
   BACKGROUND_CHILD_ENV,
@@ -88,6 +89,7 @@ interface CliOptions {
   includeUntracked?: boolean;
   keepAlive?: boolean;
   background?: boolean;
+  agentHandoff?: boolean;
   context?: number;
   mergeBase?: boolean;
 }
@@ -100,6 +102,7 @@ program
   .version(pkg.version, '-v, --version', 'output the version number')
   .enablePositionalOptions()
   .addCommand(createCommentCommand())
+  .addCommand(createReviewCommand())
   .argument(
     '[commit-ish]',
     'Git commit, tag, branch, HEAD~n reference, or "working"/"staged"/"."',
@@ -122,6 +125,10 @@ program
   .option('--clean', 'start with a clean slate by clearing all existing comments')
   .option('--include-untracked', 'automatically include untracked files in diff')
   .option('--keep-alive', 'keep server running even after browser disconnects')
+  .option(
+    '--agent-handoff',
+    'replace Copy with Pass review to agent; receive it with difit review wait',
+  )
   .option('--background', 'keep the server running in the background and output JSON info')
   .option('--context <lines>', 'number of context lines shown around each change', parseInt)
   .option(
@@ -234,6 +241,7 @@ program
           openBrowser: options.open,
           clearComments: options.clean,
           keepAlive: options.keepAlive,
+          agentHandoff: options.agentHandoff,
           ...(commentImports.length > 0 ? { commentImports } : {}),
         });
 
@@ -300,6 +308,7 @@ program
         openBrowser: options.open,
         clearComments: options.clean,
         keepAlive: options.keepAlive,
+        agentHandoff: options.agentHandoff,
         contextLines: options.context,
         diffMode: determineDiffMode(selection, compareWith),
         reviewByDefault,

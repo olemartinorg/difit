@@ -29,6 +29,7 @@ import { FileWatcherService } from './file-watcher.js';
 import { ReviewDiffParser } from './review-diff.js';
 import { ReviewApi } from './review-api.js';
 import { registerReviewReset } from './review-reset.js';
+import { registerReviewHandoff } from './review-handoff.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
 
 import {
@@ -58,6 +59,7 @@ interface ServerOptions {
   clearComments?: boolean;
   commentImports?: CommentImport[];
   keepAlive?: boolean;
+  agentHandoff?: boolean;
   diffMode?: DiffMode;
   repoPath?: string;
   contextLines?: number;
@@ -160,6 +162,7 @@ export async function startServer(
     return undefined;
   };
 
+  app.use('/api/review-handoff', express.json({ limit: '2mb' }));
   app.use(express.json());
   app.use(express.text()); // For sendBeacon text/plain requests
 
@@ -381,6 +384,7 @@ export async function startServer(
       requestedBaseMode,
       requestedIncludeUntracked: requestedSelection.includeUntracked,
       reviewAvailable: !options.stdinDiff,
+      agentHandoff: options.agentHandoff === true,
       clearComments: options.clearComments,
       repositoryId,
       commentImports: shouldIncludeCommentImports ? initialCommentImports : undefined,
@@ -752,6 +756,12 @@ export async function startServer(
     });
     return true;
   }
+
+  registerReviewHandoff(app, {
+    enabled: options.agentHandoff === true,
+    repositoryId,
+    parseThreads: parseCommentsPayload,
+  });
 
   registerReviewReset(app, {
     getSelection: getCommentSelectionFromQuery,

@@ -358,6 +358,7 @@ function App() {
 
   const reviewExport = useReviewExport({
     diff: diffData,
+    selection: selectedRevision,
     resolvedSelection,
     threads,
     settings: reviewSettings,
@@ -375,7 +376,9 @@ function App() {
   });
   const isCopiedAll = reviewExport.succeeded;
   const handleCopyAllComments = reviewExport.exportReview;
-  const showMobileCommentsBar = isMobile && (threads.length > 0 || reviewExport.error !== null);
+  const showMobileCommentsBar =
+    isMobile &&
+    (threads.length > 0 || diffData?.agentHandoff === true || reviewExport.error !== null);
 
   // Reset initialization flag when diff context changes
   useEffect(() => {
@@ -1406,10 +1409,11 @@ function App() {
                 isMobile ? 'gap-3' : 'gap-4'
               }`}
             >
-              {!isMobile && threads.length > 0 && (
+              {!isMobile && (threads.length > 0 || diffData.agentHandoff) && (
                 <CommentsDropdown
                   commentsCount={threads.length}
                   isCopiedAll={isCopiedAll}
+                  handoff={diffData.agentHandoff}
                   pending={reviewExport.pending}
                   disabled={
                     !hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')
@@ -1715,6 +1719,7 @@ function App() {
             <CommentsDropdown
               commentsCount={threads.length}
               isCopiedAll={isCopiedAll}
+              handoff={diffData.agentHandoff}
               pending={reviewExport.pending}
               disabled={!hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')}
               onCopyAll={handleCopyAllComments}

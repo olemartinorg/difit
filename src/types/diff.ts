@@ -60,6 +60,7 @@ export interface DiffResponse {
   requestedBaseMode?: BaseMode;
   requestedIncludeUntracked?: boolean;
   reviewAvailable?: boolean;
+  agentHandoff?: boolean;
   clearComments?: boolean;
   repositoryId?: string;
   commentImports?: CommentImport[];

@@ -10,9 +10,11 @@ import {
 } from '../../utils/reviewExport';
 import { clearExportedComments } from '../services/reviewExport';
 import { copyTextToClipboard } from '../utils/clipboard';
+import { generateDiffHash } from '../utils/diffUtils';
 
 interface ReviewExportOptions {
   diff: DiffResponse | null;
+  selection: DiffSelection;
   resolvedSelection: DiffSelection | null;
   threads: DiffCommentThread[];
   settings: ReviewSettings;
@@ -25,7 +27,7 @@ interface ReviewExportOptions {
 }
 
 export function useReviewExport(options: ReviewExportOptions) {
-  const { diff, resolvedSelection, threads, settings } = options;
+  const { diff, selection, resolvedSelection, threads, settings } = options;
   const context = resolvedSelection
     ? `${diff?.repositoryId}:${getDiffSelectionKey(resolvedSelection)}:${diff?.commit}`
     : '';
@@ -58,7 +60,28 @@ export function useReviewExport(options: ReviewExportOptions) {
     const isOrigin = () => currentRef.current.context === context;
     try {
       const text = formatReviewExport(prompt, settings.template);
-      await copyTextToClipboard(text);
+      if (diff.agentHandoff) {
+        const snapshot = {
+          selection,
+          resolvedSelection,
+          commit: diff.commit,
+          diffHash: await generateDiffHash(JSON.stringify(diff.files)),
+          ignoreWhitespace: diff.ignoreWhitespace === true,
+          threads,
+          text,
+        };
+        const response = await fetch('/api/review-handoff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(snapshot),
+        });
+        if (!response.ok) {
+          const payload = (await response.json()) as { error?: string };
+          throw new Error(payload.error ?? 'Could not pass the review to the agent.');
+        }
+      } else {
+        await copyTextToClipboard(text);
+      }
       exported = true;
       setSucceeded(true);
       setTimeout(() => setSucceeded(false), 2000);
@@ -88,6 +111,6 @@ export function useReviewExport(options: ReviewExportOptions) {
       busyRef.current = false;
       setPending(false);
     }
-  }, [context, diff, options, prompt, resolvedSelection, settings, threads]);
+  }, [context, diff, options, prompt, resolvedSelection, selection, settings, threads]);
   return { pending, succeeded, error, exportReview, prompt };
 }

@@ -1,4 +1,4 @@
-import { Copy, Eraser, ChevronDown, Check, List } from 'lucide-react';
+import { Copy, Eraser, ChevronDown, Check, List, Send } from 'lucide-react';
 import { useState, useRef } from 'react';
 
 import { useClickOutside } from '../hooks/useClickOutside';
@@ -11,6 +11,7 @@ interface CommentsDropdownProps {
   onViewAll?: () => void;
   direction?: 'down' | 'up';
   compact?: boolean;
+  handoff?: boolean;
   pending?: boolean;
   disabled?: boolean;
 }
@@ -23,6 +24,7 @@ export function CommentsDropdown({
   onViewAll,
   direction = 'down',
   compact = false,
+  handoff = false,
   pending = false,
   disabled = false,
 }: CommentsDropdownProps) {
@@ -49,14 +51,20 @@ export function CommentsDropdown({
   };
 
   const copyLabel = pending
-    ? 'Copying…'
-    : isCompact
+    ? handoff
+      ? 'Waiting for agent…'
+      : 'Copying…'
+    : handoff
       ? isCopiedAll
-        ? 'Copied'
-        : `Copy All (${commentsCount})`
-      : isCopiedAll
-        ? 'Copied All!'
-        : `Copy All Prompt (${commentsCount})`;
+        ? 'Sent to agent'
+        : 'Pass review to agent'
+      : isCompact
+        ? isCopiedAll
+          ? 'Copied'
+          : `Copy All (${commentsCount})`
+        : isCopiedAll
+          ? 'Copied All!'
+          : `Copy All Prompt (${commentsCount})`;
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -81,9 +89,13 @@ export function CommentsDropdown({
             e.currentTarget.style.backgroundColor = 'var(--color-yellow-btn-bg)';
             e.currentTarget.style.borderColor = 'var(--color-yellow-btn-border)';
           }}
-          title={`Copy all ${commentsCount} comments to AI coding agent`}
+          title={
+            handoff
+              ? 'Pass review to agent'
+              : `Copy all ${commentsCount} comments to AI coding agent`
+          }
         >
-          {isCopiedAll ? <Check size={12} /> : <Copy size={12} />}
+          {isCopiedAll ? <Check size={12} /> : handoff ? <Send size={12} /> : <Copy size={12} />}
           {copyLabel}
         </button>
         <button
