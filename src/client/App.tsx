@@ -1,4 +1,4 @@
-import { Columns, AlignLeft, Settings, PanelLeftClose, PanelLeft, Keyboard } from 'lucide-react';
+import { Columns, AlignLeft, Settings, PanelLeftClose, PanelLeft } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 import {
@@ -1572,15 +1572,7 @@ function App() {
                 />
               </div>
               {!isMobile && (
-                <div className="p-4 border-t border-github-border flex justify-between items-center">
-                  <button
-                    onClick={() => setIsHelpOpen(true)}
-                    className="flex items-center gap-1.5 text-github-text-secondary hover:text-github-text-primary transition-colors"
-                    title="Keyboard shortcuts (Shift+?)"
-                  >
-                    <Keyboard size={16} />
-                    <span className="text-sm">Shortcuts</span>
-                  </button>
+                <div className="p-4 border-t border-github-border flex justify-end items-center">
                   <a
                     href="https://github.com/yoshiko-pg/difit"
                     target="_blank"

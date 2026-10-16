@@ -18,6 +18,7 @@ import {
   isSyntaxThemeForResolvedTheme,
 } from '../utils/themeLoader';
 import { Tooltip } from './Tooltip';
+import { HelpModal } from './HelpModal';
 
 interface EditorSettings {
   id: EditorOptionId;
@@ -43,7 +44,7 @@ interface SettingsModalProps {
   reviewSection?: ReactNode;
 }
 
-type SettingsSection = 'appearance' | 'system' | 'review';
+type SettingsSection = 'appearance' | 'system' | 'review' | 'shortcuts';
 
 const DEFAULT_SETTINGS: AppearanceSettings = {
   fontSize: 14,
@@ -102,6 +103,7 @@ export function SettingsModal({
   const sections = [
     ...SETTINGS_SECTIONS,
     ...(reviewSection ? [{ id: 'review' as const, label: 'Review' }] : []),
+    { id: 'shortcuts' as const, label: 'Shortcuts' },
   ];
   const [autoViewedPatternsInput, setAutoViewedPatternsInput] = useState(
     formatAutoViewedPatterns(settings.autoViewedPatterns),
@@ -188,7 +190,7 @@ export function SettingsModal({
 
   return (
     <div className="fixed inset-0 flex items-center justify-center z-50 pointer-events-none">
-      <div className="bg-github-bg-secondary border border-github-border rounded-lg w-full max-w-3xl mx-4 pointer-events-auto overflow-hidden">
+      <div className="bg-github-bg-secondary border border-github-border rounded-lg w-full max-w-3xl mx-4 pointer-events-auto overflow-hidden max-h-[calc(100dvh-2rem)] flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-github-border">
           <h2 className="text-lg font-semibold text-github-text-primary flex items-center gap-2">
             <Settings size={20} />
@@ -202,10 +204,10 @@ export function SettingsModal({
           </button>
         </div>
 
-        <div className="flex flex-col sm:flex-row min-h-[420px]">
+        <div className="flex flex-col sm:flex-row min-h-0 sm:min-h-[420px] overflow-hidden">
           <nav
             aria-label="Settings sections"
-            className="sm:w-40 border-b sm:border-b-0 sm:border-r border-github-border px-3 py-2"
+            className="shrink-0 sm:w-40 border-b sm:border-b-0 sm:border-r border-github-border px-3 py-2"
           >
             <div className="flex sm:flex-col gap-1">
               {sections.map((section) => {
@@ -229,7 +231,7 @@ export function SettingsModal({
             </div>
           </nav>
 
-          <div className="flex-1 p-4 sm:p-6 overflow-y-auto">
+          <div className="min-w-0 flex-1 p-4 sm:p-6 overflow-y-auto">
             {activeSection === 'appearance' && (
               <div className="space-y-6">
                 <div>
@@ -503,11 +505,12 @@ export function SettingsModal({
               </div>
             )}
             {activeSection === 'review' && reviewSection}
+            {activeSection === 'shortcuts' && <HelpModal isOpen onClose={onClose} embedded />}
           </div>
         </div>
 
         <div className="flex items-center justify-between gap-3 p-4 border-t border-github-border">
-          {activeSection !== 'review' && (
+          {(activeSection === 'appearance' || activeSection === 'system') && (
             <button
               onClick={handleReset}
               className="px-3 py-2 text-sm text-github-text-secondary hover:text-github-text-primary"
