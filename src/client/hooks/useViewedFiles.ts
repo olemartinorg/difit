@@ -8,6 +8,7 @@ import {
 } from '../../types/diff';
 import { getDiffSelectionKey } from '../../utils/diffSelection';
 import { storageService, VIEWED_HASH_VERSION } from '../services/StorageService';
+import { resetViewedState } from '../services/viewedReset';
 import { matchesAutoViewedPatterns } from '../utils/autoViewedPatterns';
 import { generateDiffHash, getDiffContentForHashing } from '../utils/diffUtils';
 
@@ -25,7 +26,7 @@ interface UseViewedFilesReturn {
   setFilesViewed: (diffFiles: DiffFile[], viewed: boolean) => Promise<void>;
   isFileContentChanged: (filePath: string, diffFile: DiffFile) => Promise<boolean>;
   getViewedFileRecord: (filePath: string) => ViewedFileRecord | undefined;
-  clearViewedFiles: (currentReviewOnly?: boolean) => void;
+  clearViewedFiles: (currentReviewOnly?: boolean) => Promise<void>;
 }
 
 export function useViewedFiles(
@@ -51,6 +52,8 @@ export function useViewedFiles(
           baseMode,
         })}:${currentCommitHash ?? 'no-commit'}`
       : null;
+  const currentViewedKeyRef = useRef(viewedFilesKey);
+  currentViewedKeyRef.current = viewedFilesKey;
   const hasLoadedInitialViewedFiles =
     viewedFilesKey !== null && loadedViewedFilesKey === viewedFilesKey;
 
@@ -346,16 +349,45 @@ export function useViewedFiles(
     [viewedFileRecords, getViewedFileRecord, getFileHash, saveViewedFiles, repositoryId],
   );
 
-  // Clear all viewed files
+  // Reset manual progress and reapply the configured automatic rules.
   const clearViewedFiles = useCallback(
-    (currentReviewOnly = false) => {
-      saveViewedFiles([]);
-      setFileHashes(new Map());
-      setChangedSinceViewedFiles(new Set());
-      if (currentReviewOnly) storageService.removeViewedHashes(repositoryId, viewedFileRecords);
-      else storageService.clearViewedHashIndex(repositoryId);
+    async (currentReviewOnly = false) => {
+      if (!baseCommitish || !targetCommitish) return;
+      const generation =
+        currentViewedKeyRef.current === viewedFilesKey
+          ? ++generationRef.current
+          : generationRef.current;
+      const reset = resetViewedState(
+        {
+          baseCommitish,
+          targetCommitish,
+          commit: currentCommitHash,
+          branchToHash,
+          repositoryId,
+          baseMode,
+        },
+        initialFiles ?? [],
+        autoViewedPatterns,
+        currentReviewOnly,
+      );
+      const automaticRecords = Array.isArray(reset) ? reset : await reset;
+      if (currentViewedKeyRef.current === viewedFilesKey && generationRef.current === generation) {
+        setViewedFileRecords(automaticRecords);
+        setFileHashes(new Map());
+        setChangedSinceViewedFiles(new Set());
+      }
     },
-    [saveViewedFiles, repositoryId, viewedFileRecords],
+    [
+      baseCommitish,
+      targetCommitish,
+      currentCommitHash,
+      branchToHash,
+      repositoryId,
+      baseMode,
+      viewedFilesKey,
+      initialFiles,
+      autoViewedPatterns,
+    ],
   );
 
   return {

@@ -28,7 +28,8 @@ import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { ReviewPicker } from './components/ReviewPicker';
 import { useReviewInventory } from './hooks/useReviewInventory';
 import { useReviewReset } from './hooks/useReviewReset';
-import { ReviewResetSection } from './components/ReviewResetSection';
+import { matchesAutoViewedPatterns } from './utils/autoViewedPatterns';
+import { ResetViewedButton } from './components/ResetViewedButton';
 import { DiffViewer } from './components/DiffViewer';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
@@ -218,6 +219,8 @@ function App() {
 
     return `${diffData?.repositoryId ?? 'default'}:${resolvedSelectionKey}`;
   }, [diffData?.repositoryId, resolvedSelectionKey]);
+  const currentReviewRef = useRef({ key: commentsContextKey, commit: diffData?.commit });
+  currentReviewRef.current = { key: commentsContextKey, commit: diffData?.commit };
   const commentSessionQueryString = useMemo(() => {
     if (!resolvedSelection) {
       return null;
@@ -327,6 +330,27 @@ function App() {
     settings.autoViewedPatterns,
     resolvedSelection?.baseMode,
   );
+
+  const resetViewedProgress = async () => {
+    await clearViewedFiles(true);
+    if (
+      currentReviewRef.current.key !== commentsContextKey ||
+      currentReviewRef.current.commit !== diffData?.commit
+    )
+      return;
+    setCollapsedFiles(
+      new Set(
+        (diffData?.files ?? [])
+          .filter(
+            (file) =>
+              file.isGenerated ||
+              file.status === 'deleted' ||
+              matchesAutoViewedPatterns(file.path, settings.autoViewedPatterns),
+          )
+          .map((file) => file.path),
+      ),
+    );
+  };
 
   // Reset initialization flag when diff context changes
   useEffect(() => {
@@ -919,20 +943,6 @@ function App() {
     if (review.inventory && shouldReload && !watchState.isReloading) reload();
   }, [review.inventory, shouldReload, watchState.isReloading, reload]);
 
-  const handleResetReview = () =>
-    reviewReset.reset(
-      getCommentApiUrl('/api/comments'),
-      () => {
-        clearAllComments();
-        clearViewedFiles(true);
-        skipNextCommentSyncRef.current = true;
-        if (commentsContextKey) setBootstrappedCommentsKey(commentsContextKey);
-      },
-      (version) => {
-        serverCommentVersionRef.current = version;
-      },
-    );
-
   // Clear comments and viewed files on initial load if requested via CLI flag
   const hasCleanedRef = useRef(false);
   useEffect(() => {
@@ -940,7 +950,7 @@ function App() {
       hasCleanedRef.current = true;
       pendingBootstrapAfterLocalResetRef.current = true;
       clearAllComments({ resetAppliedCommentImportIds: true });
-      clearViewedFiles();
+      void clearViewedFiles();
       console.log(
         '✅ All existing comments and viewed files cleared as requested via --clean flag',
       );
@@ -1369,6 +1379,12 @@ function App() {
                     ? 'All diffs difit-ed!'
                     : `${viewedFiles.size} / ${diffData.files.length} files viewed`}
                   <SparkleAnimation isActive={showSparkles} />
+                  {viewedFiles.size > 0 && (
+                    <ResetViewedButton
+                      onReset={() => void resetViewedProgress()}
+                      disabled={!hasLoadedInitialViewedFiles}
+                    />
+                  )}
                 </div>
                 <div
                   className="relative h-2 bg-github-bg-tertiary rounded-full overflow-hidden"
@@ -1658,18 +1674,6 @@ function App() {
             onClose={() => setIsSettingsOpen(false)}
             settings={settings}
             onSettingsChange={updateSettings}
-            reviewSection={
-              <ReviewResetSection
-                onReset={() => void handleResetReview()}
-                disabled={
-                  !resolvedSelection ||
-                  diffData.files.length === 0 ||
-                  !hasLoadedInitialViewedFiles ||
-                  !hasBootstrappedComments
-                }
-                error={reviewReset.error}
-              />
-            }
           />
         )}
 
