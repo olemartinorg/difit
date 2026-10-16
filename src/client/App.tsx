@@ -1,4 +1,4 @@
-import { Columns, AlignLeft, Settings, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { Columns, AlignLeft } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 import {
@@ -36,6 +36,8 @@ import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
 import { Logo } from './components/Logo';
+import { ReviewLayoutControls } from './components/ReviewLayoutControls';
+import './styles/minimal-ui.css';
 import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -1293,15 +1295,38 @@ function App() {
     settings.editor.command.trim() !== '' &&
     settings.editor.argsTemplate.trim() !== '';
 
+  const minimalUI = settings.minimalUI === true;
+  const minimalDesktop = minimalUI && !isMobile;
+  const layoutControls = (
+    <ReviewLayoutControls
+      sidebarOpen={isFileTreeOpen}
+      onToggleSidebar={() => setIsFileTreeOpen(!isFileTreeOpen)}
+      onOpenSettings={() => setIsSettingsOpen(true)}
+    />
+  );
+
   return (
     <WordHighlightProvider>
-      <div className="h-screen flex flex-col" onClickCapture={handleGlobalClick}>
+      <div
+        className="h-screen flex flex-col"
+        onClickCapture={handleGlobalClick}
+        data-minimal-ui={minimalUI}
+        data-minimal-desktop={minimalDesktop}
+        style={
+          minimalDesktop
+            ? {
+                gridTemplateColumns: `${isFileTreeOpen ? sidebarWidth : 0}px ${isFileTreeOpen ? 4 : 0}px minmax(0, 1fr)`,
+              }
+            : undefined
+        }
+      >
         <header
           className={`bg-github-bg-secondary border-b border-github-border flex ${
             isMobile ? 'flex-col' : 'flex-row items-center'
           }`}
         >
           <div
+            data-review-brand
             className={`flex items-center justify-between w-full ${
               isMobile ? 'px-3 py-2 gap-3' : 'px-4 py-3 gap-4 w-auto'
             } ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
@@ -1319,28 +1344,11 @@ function App() {
                 }}
               />
             </h1>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setIsFileTreeOpen(!isFileTreeOpen)}
-                className="p-2 text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary rounded transition-colors"
-                title={isFileTreeOpen ? 'Collapse file tree' : 'Expand file tree'}
-                aria-expanded={isFileTreeOpen}
-                aria-controls="file-tree-panel"
-                aria-label="Toggle file tree panel"
-              >
-                {isFileTreeOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
-              </button>
-              <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-2 text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary rounded transition-colors"
-                title="Settings"
-              >
-                <Settings size={18} />
-              </button>
-            </div>
+            {layoutControls}
           </div>
           {!isMobile && (
             <div
+              data-review-header-divider
               className={`border-r border-github-border ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
               style={{
                 width: isFileTreeOpen ? '4px' : '0px',
@@ -1356,6 +1364,7 @@ function App() {
             }`}
           >
             <div className={`flex flex-wrap items-center ${isMobile ? 'gap-2' : 'gap-3'}`}>
+              {minimalUI && layoutControls}
               {!isMobile && (
                 <div className="flex bg-github-bg-tertiary border border-github-border rounded-md p-1">
                   <button
@@ -1533,8 +1542,9 @@ function App() {
           />
         )}
 
-        <div className="flex flex-1 overflow-hidden relative">
+        <div data-review-body className="flex flex-1 overflow-hidden relative">
           <div
+            data-review-sidebar
             className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
             style={{
               width: isMobile ? '0px' : isFileTreeOpen ? `${sidebarWidth}px` : '0px',
@@ -1571,7 +1581,7 @@ function App() {
                   selectedFileIndex={cursor?.fileIndex ?? null}
                 />
               </div>
-              {!isMobile && (
+              {!isMobile && !settings.minimalUI && (
                 <div className="p-4 border-t border-github-border flex justify-end items-center">
                   <a
                     href="https://github.com/yoshiko-pg/difit"
@@ -1590,6 +1600,7 @@ function App() {
 
           {!isMobile && (
             <div
+              data-review-resizer
               className={`bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
               style={{
                 width: isFileTreeOpen ? '4px' : '0px',

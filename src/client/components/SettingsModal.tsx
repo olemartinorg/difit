@@ -34,6 +34,7 @@ interface AppearanceSettings {
   editor: EditorSettings;
   colorVision: ColorVisionMode;
   autoViewedPatterns: string[];
+  minimalUI?: boolean;
 }
 
 interface SettingsModalProps {
@@ -59,6 +60,7 @@ const DEFAULT_SETTINGS: AppearanceSettings = {
   },
   colorVision: 'normal',
   autoViewedPatterns: [],
+  minimalUI: false,
 };
 
 const FONT_FAMILIES = [
@@ -174,6 +176,7 @@ export function SettingsModal({
         theme: DEFAULT_SETTINGS.theme,
         syntaxTheme: DEFAULT_SETTINGS.syntaxTheme,
         colorVision: DEFAULT_SETTINGS.colorVision,
+        minimalUI: DEFAULT_SETTINGS.minimalUI,
       });
       return;
     }
@@ -234,6 +237,17 @@ export function SettingsModal({
           <div className="min-w-0 flex-1 p-4 sm:p-6 overflow-y-auto">
             {activeSection === 'appearance' && (
               <div className="space-y-6">
+                <label className="flex items-center gap-2 text-sm text-github-text-primary">
+                  <input
+                    type="checkbox"
+                    checked={settings.minimalUI === true}
+                    onChange={(event) =>
+                      onSettingsChange({ ...settings, minimalUI: event.target.checked })
+                    }
+                    className="accent-github-accent"
+                  />
+                  Minimal UI
+                </label>
                 <div>
                   <label className="block text-sm font-medium text-github-text-primary mb-2">
                     Font Size

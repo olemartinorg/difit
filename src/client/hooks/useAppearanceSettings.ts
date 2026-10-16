@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS: AppearanceSettings = {
   },
   colorVision: 'normal',
   autoViewedPatterns: [],
+  minimalUI: false,
 };
 
 /**
@@ -86,6 +87,7 @@ const normalizeStoredSettings = (raw: unknown): AppearanceSettings | null => {
   return {
     ...DEFAULT_SETTINGS,
     ...parsed,
+    minimalUI: parsed.minimalUI === true,
     editor: normalizeEditorSettings(parsed.editor),
     autoViewedPatterns: normalizeAutoViewedPatterns(parsed.autoViewedPatterns),
   };
