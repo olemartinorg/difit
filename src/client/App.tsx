@@ -36,6 +36,7 @@ import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
 import { Logo } from './components/Logo';
+import { ReviewScrollContainer } from './components/ReviewScrollContainer';
 import { ReviewLayoutControls } from './components/ReviewLayoutControls';
 import './styles/minimal-ui.css';
 import { ReloadButton } from './components/ReloadButton';
@@ -1610,8 +1611,8 @@ function App() {
             />
           )}
 
-          <main
-            ref={diffScrollContainerRef}
+          <ReviewScrollContainer
+            containerRef={diffScrollContainerRef}
             aria-busy={loading}
             className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
           >
@@ -1709,7 +1710,7 @@ function App() {
                 </div>
               );
             })}
-          </main>
+          </ReviewScrollContainer>
         </div>
 
         {showMobileCommentsBar && (
