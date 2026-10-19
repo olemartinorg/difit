@@ -9,6 +9,7 @@ import {
   type ReviewSettings,
 } from '../../utils/reviewExport';
 import { clearExportedComments } from '../services/reviewExport';
+import { captureReviewHandoffContext } from '../services/reviewHandoffContext';
 import { copyTextToClipboard } from '../utils/clipboard';
 import { generateDiffHash } from '../utils/diffUtils';
 
@@ -59,8 +60,10 @@ export function useReviewExport(options: ReviewExportOptions) {
     const originalThreads = JSON.stringify(threads);
     const isOrigin = () => currentRef.current.context === context;
     try {
+      const hostContext = diff.agentHandoff ? captureReviewHandoffContext() : undefined;
       const text = formatReviewExport(prompt, settings.template);
       if (diff.agentHandoff) {
+        const capturedHostContext = await hostContext;
         const snapshot = {
           selection,
           resolvedSelection,
@@ -69,6 +72,7 @@ export function useReviewExport(options: ReviewExportOptions) {
           ignoreWhitespace: diff.ignoreWhitespace === true,
           threads,
           text,
+          hostContext: capturedHostContext,
         };
         const response = await fetch('/api/review-handoff', {
           method: 'POST',

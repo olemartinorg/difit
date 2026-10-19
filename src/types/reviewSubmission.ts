@@ -11,4 +11,6 @@ export interface ReviewSubmission {
   ignoreWhitespace: boolean;
   threads: DiffCommentThread[];
   text: string;
+  /** Optional opaque embedder context. Text exports remain unchanged. */
+  hostContext?: unknown;
 }
