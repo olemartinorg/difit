@@ -59,12 +59,12 @@ export function CommentsDropdown({
 
   const copyLabel = pending
     ? handoff
-      ? 'Waiting for agent…'
+      ? `Waiting for agent… (${commentsCount})`
       : 'Copying…'
     : handoff
       ? isCopiedAll
-        ? 'Sent to agent'
-        : 'Pass review to agent'
+        ? `Sent to agent (${commentsCount})`
+        : `Pass review to agent (${commentsCount})`
       : isCompact
         ? isCopiedAll
           ? 'Copied'
