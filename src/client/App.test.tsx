@@ -68,20 +68,24 @@ const mockWatchState: ClientWatchState = {
   connectionStatus: 'connected',
 };
 
+let mockCommentsChanged: (() => Promise<void>) | undefined;
 vi.mock('./hooks/useFileWatch', () => ({
-  useFileWatch: vi.fn((onReload?: () => Promise<void>) => ({
-    shouldReload: mockWatchState.shouldReload,
-    isConnected: true,
-    error: null,
-    reload: vi.fn(async () => {
-      if (onReload) {
-        await onReload();
-      }
-      mockWatchState.shouldReload = false;
-      mockWatchState.lastChangeType = null;
-    }),
-    watchState: mockWatchState,
-  })),
+  useFileWatch: vi.fn((onReload?: () => Promise<void>, onCommentsChanged?: () => Promise<void>) => {
+    mockCommentsChanged = onCommentsChanged;
+    return {
+      shouldReload: mockWatchState.shouldReload,
+      isConnected: true,
+      error: null,
+      reload: vi.fn(async () => {
+        if (onReload) {
+          await onReload();
+        }
+        mockWatchState.shouldReload = false;
+        mockWatchState.lastChangeType = null;
+      }),
+      watchState: mockWatchState,
+    };
+  }),
 }));
 
 // Mock navigator.sendBeacon
@@ -610,6 +614,43 @@ describe('App Component - Comment sync', () => {
       expect(request.method).toBe('POST');
       expect(JSON.parse(String(request.body))).toEqual({ threads: [] });
     });
+  });
+
+  it('keeps a local reply when an earlier comment refresh finishes afterwards', async () => {
+    const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
+    mockComments = [root];
+    const { rerender } = renderApp();
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
+    mockReplaceThreads.mockClear();
+    const originalFetch = vi.mocked(global.fetch).getMockImplementation()!;
+    let finish: ((value: Response) => void) | undefined;
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/comments-json'))
+        return new Promise<Response>((resolve) => {
+          finish = resolve;
+        });
+      return originalFetch(input, init);
+    });
+    let refreshing: Promise<void> | undefined;
+    act(() => {
+      refreshing = mockCommentsChanged?.();
+    });
+    mockComments = [
+      {
+        ...root,
+        messages: [...root.messages, { ...root.messages[0]!, id: 'reply', body: 'New reply' }],
+      },
+    ];
+    rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>,
+    );
+    await act(async () => {
+      finish?.(new Response(JSON.stringify({ version: 1, threads: [root] }), { status: 200 }));
+      await refreshing;
+    });
+    expect(mockReplaceThreads).not.toHaveBeenCalled();
   });
 
   it('sends an empty comment list on unload when no comments remain', async () => {
