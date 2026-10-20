@@ -222,6 +222,7 @@ function App() {
   const latestThreadsRef = useRef(threads);
   latestThreadsRef.current = threads;
   const pendingCommentSyncRef = useRef(0);
+  const pendingCommentRefreshRef = useRef(false);
 
   const commentsContextKey = useMemo(() => {
     if (!resolvedSelectionKey) {
@@ -290,6 +291,37 @@ function App() {
     return Array.isArray(payload.threads) ? payload.threads : [];
   }, [getCommentApiUrl]);
 
+  const handleCommentsChanged = useCallback(
+    async function refreshComments() {
+      if (pendingCommentSyncRef.current > 0) {
+        pendingCommentRefreshRef.current = true;
+        return;
+      }
+      pendingCommentRefreshRef.current = false;
+      const originalThreads = latestThreadsRef.current;
+      const generation = reviewReset.generationRef.current;
+      try {
+        const serverThreads = await fetchServerThreads();
+        if (generation !== reviewReset.generationRef.current) return;
+        // A local edit made while this read was pending has its own sync request.
+        // Read again after it settles instead of adopting this older snapshot.
+        if (latestThreadsRef.current !== originalThreads || pendingCommentSyncRef.current > 0) {
+          pendingCommentRefreshRef.current = true;
+          if (pendingCommentSyncRef.current === 0) void refreshComments();
+          return;
+        }
+        skipNextCommentSyncRef.current = true;
+        replaceThreads(serverThreads);
+        if (commentsContextKey) {
+          setBootstrappedCommentsKey(commentsContextKey);
+        }
+      } catch (commentsError) {
+        console.error('Failed to refresh comments from server:', commentsError);
+      }
+    },
+    [commentsContextKey, fetchServerThreads, replaceThreads, reviewReset.generationRef],
+  );
+
   const syncThreadsToServer = useCallback(
     async (nextThreads: DiffCommentThread[]) => {
       pendingCommentSyncRef.current++;
@@ -330,9 +362,12 @@ function App() {
         }
       } finally {
         pendingCommentSyncRef.current--;
+        if (pendingCommentSyncRef.current === 0 && pendingCommentRefreshRef.current) {
+          void handleCommentsChanged();
+        }
       }
     },
-    [getCommentApiUrl, replaceThreads, reviewReset.generationRef],
+    [getCommentApiUrl, handleCommentsChanged, replaceThreads, reviewReset.generationRef],
   );
 
   // Viewed files management
@@ -652,29 +687,6 @@ function App() {
     const handled = await refreshReviewRef.current?.();
     if (!handled) await fetchDiffDataRef.current?.();
   }, []);
-  const handleCommentsChanged = useCallback(async () => {
-    if (pendingCommentSyncRef.current > 0) return;
-    const originalThreads = latestThreadsRef.current;
-    const generation = reviewReset.generationRef.current;
-    try {
-      const serverThreads = await fetchServerThreads();
-      // A local edit made while this read was pending has its own sync request.
-      // Adopting this older snapshot would erase the edit before it can settle.
-      if (
-        generation !== reviewReset.generationRef.current ||
-        latestThreadsRef.current !== originalThreads ||
-        pendingCommentSyncRef.current > 0
-      )
-        return;
-      skipNextCommentSyncRef.current = true;
-      replaceThreads(serverThreads);
-      if (commentsContextKey) {
-        setBootstrappedCommentsKey(commentsContextKey);
-      }
-    } catch (commentsError) {
-      console.error('Failed to refresh comments from server:', commentsError);
-    }
-  }, [commentsContextKey, fetchServerThreads, replaceThreads, reviewReset.generationRef]);
 
   // File watch for reload functionality - initialize with callback
   const {
