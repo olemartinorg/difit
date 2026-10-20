@@ -20,6 +20,7 @@ interface ReviewExportOptions {
   threads: DiffCommentThread[];
   settings: ReviewSettings;
   ready: boolean;
+  handoff?: boolean;
   commentsUrl: string;
   commentVersion: number | null;
   generatePrompt: (context?: CommentPromptDiffContext, separator?: string) => string;
@@ -30,6 +31,7 @@ interface ReviewExportOptions {
 export function useReviewExport(options: ReviewExportOptions) {
   const { diff, selection, resolvedSelection, threads, settings } = options;
   const context = diff?.repositoryId ?? '';
+  const handoff = options.handoff ?? diff?.agentHandoff === true;
   const currentRef = useRef({ context, threads });
   currentRef.current = { context, threads };
   const busyRef = useRef(false);
@@ -58,9 +60,9 @@ export function useReviewExport(options: ReviewExportOptions) {
     const originalThreads = JSON.stringify(threads);
     const isOrigin = () => currentRef.current.context === context;
     try {
-      const hostContext = diff.agentHandoff ? captureReviewHandoffContext() : undefined;
+      const hostContext = handoff ? captureReviewHandoffContext() : undefined;
       const text = formatReviewExport(prompt, settings.template);
-      if (diff.agentHandoff) {
+      if (handoff) {
         const capturedHostContext = await hostContext;
         const snapshot = {
           selection,
@@ -111,6 +113,6 @@ export function useReviewExport(options: ReviewExportOptions) {
       busyRef.current = false;
       setPending(false);
     }
-  }, [context, diff, options, prompt, resolvedSelection, selection, settings, threads]);
+  }, [context, diff, handoff, options, prompt, resolvedSelection, selection, settings, threads]);
   return { pending, succeeded, error, exportReview, prompt };
 }

@@ -7,6 +7,9 @@ interface CommentsDropdownProps {
   commentsCount: number;
   isCopiedAll: boolean;
   onCopyAll: () => void;
+  onPassToAgent?: () => void;
+  copyPending?: boolean;
+  isCopiedToClipboard?: boolean;
   onDeleteAll: () => void;
   onViewAll?: () => void;
   direction?: 'down' | 'up';
@@ -20,6 +23,9 @@ export function CommentsDropdown({
   commentsCount,
   isCopiedAll,
   onCopyAll,
+  onPassToAgent,
+  copyPending = false,
+  isCopiedToClipboard = false,
   onDeleteAll,
   onViewAll,
   direction = 'down',
@@ -35,8 +41,9 @@ export function CommentsDropdown({
 
   useClickOutside(dropdownRef, () => setIsOpen(false));
 
-  const handleCopyAll = () => {
-    onCopyAll();
+  const handleExport = () => {
+    if (handoff) onPassToAgent?.();
+    else onCopyAll();
     setIsOpen(false);
   };
 
@@ -70,7 +77,7 @@ export function CommentsDropdown({
     <div className="relative" ref={dropdownRef}>
       <div className="flex">
         <button
-          onClick={handleCopyAll}
+          onClick={handleExport}
           disabled={disabled || pending}
           className={`text-xs px-3 py-1.5 pr-2 rounded-l transition-all flex items-center gap-1.5 ${
             isCompact ? 'whitespace-normal' : 'whitespace-nowrap'
@@ -136,6 +143,19 @@ export function CommentsDropdown({
             borderBottom: isUp ? 'none' : undefined,
           }}
         >
+          {handoff && (
+            <button
+              onClick={() => {
+                onCopyAll();
+                setIsOpen(false);
+              }}
+              disabled={disabled || copyPending}
+              className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 text-github-text-primary hover:bg-github-bg-tertiary transition-colors"
+            >
+              {isCopiedToClipboard ? <Check size={12} /> : <Copy size={12} />}
+              {isCopiedToClipboard ? 'Copied All!' : `Copy All Prompt (${commentsCount})`}
+            </button>
+          )}
           {onViewAll && (
             <button
               onClick={handleViewAll}

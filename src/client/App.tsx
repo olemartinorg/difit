@@ -359,7 +359,7 @@ function App() {
     );
   };
 
-  const reviewExport = useReviewExport({
+  const reviewExportOptions = {
     diff: diffData,
     selection: selectedRevision,
     resolvedSelection,
@@ -370,18 +370,28 @@ function App() {
     commentVersion: serverCommentVersionRef.current,
     generatePrompt: generateAllCommentsPrompt,
     resetViewed: resetViewedProgress,
-    clearComments: (version) => {
+    clearComments: (version: number) => {
       serverCommentVersionRef.current = version;
       reviewReset.invalidate();
       skipNextCommentSyncRef.current = true;
       clearAllComments();
     },
-  });
-  const isCopiedAll = reviewExport.succeeded;
-  const handleCopyAllComments = reviewExport.exportReview;
+  };
+  const reviewExport = useReviewExport(reviewExportOptions);
+  const clipboardExport = useReviewExport({ ...reviewExportOptions, handoff: false });
+  const [lastExportAction, setLastExportAction] = useState<'copy' | 'handoff'>('handoff');
+  const exportError = lastExportAction === 'copy' ? clipboardExport.error : reviewExport.error;
+  const isCopiedAll = diffData?.agentHandoff ? reviewExport.succeeded : clipboardExport.succeeded;
+  const handleCopyAllComments = () => {
+    setLastExportAction('copy');
+    return clipboardExport.exportReview();
+  };
+  const handlePassToAgent = () => {
+    setLastExportAction('handoff');
+    return reviewExport.exportReview();
+  };
   const showMobileCommentsBar =
-    isMobile &&
-    (threads.length > 0 || diffData?.agentHandoff === true || reviewExport.error !== null);
+    isMobile && (threads.length > 0 || diffData?.agentHandoff === true || exportError !== null);
 
   // Reset initialization flag when diff context changes
   useEffect(() => {
@@ -1424,7 +1434,10 @@ function App() {
                   commentsCount={threads.length}
                   isCopiedAll={isCopiedAll}
                   handoff={diffData.agentHandoff}
-                  pending={reviewExport.pending}
+                  pending={diffData.agentHandoff ? reviewExport.pending : clipboardExport.pending}
+                  copyPending={clipboardExport.pending}
+                  isCopiedToClipboard={clipboardExport.succeeded}
+                  onPassToAgent={handlePassToAgent}
                   disabled={
                     !hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')
                   }
@@ -1433,9 +1446,9 @@ function App() {
                   onViewAll={() => setIsCommentsListOpen(true)}
                 />
               )}
-              {!isMobile && reviewExport.error && (
+              {!isMobile && exportError && (
                 <span role="alert" className="text-xs text-github-danger max-w-64">
-                  {reviewExport.error}
+                  {exportError}
                 </span>
               )}
               <div className="flex flex-col gap-1 items-center">
@@ -1715,16 +1728,19 @@ function App() {
 
         {showMobileCommentsBar && (
           <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
-            {reviewExport.error && (
+            {exportError && (
               <span role="alert" className="text-xs text-github-danger mr-3">
-                {reviewExport.error}
+                {exportError}
               </span>
             )}
             <CommentsDropdown
               commentsCount={threads.length}
               isCopiedAll={isCopiedAll}
               handoff={diffData.agentHandoff}
-              pending={reviewExport.pending}
+              pending={diffData.agentHandoff ? reviewExport.pending : clipboardExport.pending}
+              copyPending={clipboardExport.pending}
+              isCopiedToClipboard={clipboardExport.succeeded}
+              onPassToAgent={handlePassToAgent}
               disabled={!hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')}
               onCopyAll={handleCopyAllComments}
               onDeleteAll={clearAllComments}
