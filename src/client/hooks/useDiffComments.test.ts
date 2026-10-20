@@ -1,43 +1,8 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import type { DiffContextStorage } from '../../types/diff';
+import { loadReviewComments } from '../services/reviewComments';
 import { useDiffComments } from './useDiffComments';
-
-// Mock StorageService
-let mockDiffContextData: DiffContextStorage | null = null;
-vi.mock('../services/StorageService', () => ({
-  storageService: {
-    getCommentThreads: vi.fn(() => mockDiffContextData?.threads || []),
-    saveCommentThreads: vi.fn(
-      (baseCommitish: string, targetCommitish: string, threads: DiffContextStorage['threads']) => {
-        const now = new Date().toISOString();
-        mockDiffContextData = {
-          version: 2,
-          baseCommitish,
-          targetCommitish,
-          createdAt: mockDiffContextData?.createdAt ?? now,
-          lastModifiedAt: now,
-          threads,
-          viewedFiles: mockDiffContextData?.viewedFiles ?? [],
-          appliedCommentImportIds: mockDiffContextData?.appliedCommentImportIds ?? [],
-        };
-      },
-    ),
-    getComments: vi.fn(() => []),
-    saveComments: vi.fn(),
-    getDiffContextData: vi.fn(() => mockDiffContextData),
-    saveDiffContextData: vi.fn(
-      (baseCommitish: string, targetCommitish: string, data: DiffContextStorage) => {
-        mockDiffContextData = {
-          ...data,
-          baseCommitish,
-          targetCommitish,
-        };
-      },
-    ),
-  },
-}));
 
 // Mock diffUtils
 vi.mock('../utils/diffUtils', () => ({
@@ -51,7 +16,39 @@ vi.mock('../utils/diffUtils', () => ({
 describe('useDiffComments', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDiffContextData = null;
+    localStorage.clear();
+  });
+
+  it('preserves comments, replies and import ids when the comparison changes', () => {
+    const { result, rerender } = renderHook(
+      ({ base, target }) => useDiffComments(base, target, undefined, undefined, 'repo'),
+      { initialProps: { base: 'HEAD', target: 'working' } },
+    );
+    act(() => {
+      result.current.applyCommentImports(
+        [
+          {
+            type: 'thread',
+            id: 'root',
+            filePath: 'test.ts',
+            position: { side: 'new', line: 2 },
+            body: 'Root',
+          },
+          {
+            type: 'reply',
+            id: 'reply',
+            filePath: 'test.ts',
+            position: { side: 'new', line: 2 },
+            body: 'Reply',
+          },
+        ],
+        'import',
+      );
+    });
+    const threads = result.current.threads;
+    rerender({ base: 'main', target: 'feature' });
+    expect(result.current.threads).toEqual(threads);
+    expect(loadReviewComments('repo').appliedCommentImportIds).toEqual(['import']);
   });
 
   describe('generatePrompt', () => {
@@ -367,7 +364,7 @@ const next = true;
       });
 
       expect(result.current.threads).toHaveLength(1);
-      expect(mockDiffContextData?.appliedCommentImportIds).toEqual(['import-bundle-1']);
+      expect(loadReviewComments().appliedCommentImportIds).toEqual(['import-bundle-1']);
     });
 
     it('adds imported replies to the newest matching thread', async () => {
@@ -458,14 +455,14 @@ const next = true;
         );
       });
 
-      expect(mockDiffContextData?.appliedCommentImportIds).toEqual(['import-bundle-4']);
+      expect(loadReviewComments().appliedCommentImportIds).toEqual(['import-bundle-4']);
 
       act(() => {
         result.current.clearAllComments({ resetAppliedCommentImportIds: true });
       });
 
       expect(result.current.threads).toHaveLength(0);
-      expect(mockDiffContextData?.appliedCommentImportIds).toEqual([]);
+      expect(loadReviewComments().appliedCommentImportIds).toEqual([]);
     });
 
     it('should not remove a thread when reply deletion targets a missing message id', () => {

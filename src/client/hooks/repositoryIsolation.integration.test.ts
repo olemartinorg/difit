@@ -93,6 +93,7 @@ describe('Repository Isolation Integration Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStorage.clear();
+    localStorage.clear();
   });
 
   describe('useDiffComments - Repository Isolation', () => {

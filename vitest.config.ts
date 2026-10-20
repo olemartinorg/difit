@@ -15,6 +15,10 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'dev/**/*.test.ts'],
     setupFiles: ['./vitest.setup.ts'],
     pool: 'forks',
+    // Let Happy DOM supply browser storage instead of Node's host storage getter.
+    execArgv: process.allowedNodeEnvironmentFlags.has('--no-experimental-webstorage')
+      ? ['--no-experimental-webstorage']
+      : [],
   },
   resolve: {
     alias: [

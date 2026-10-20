@@ -1142,7 +1142,7 @@ describe('Server Integration Tests', () => {
       });
     });
 
-    it('isolates comment sessions between different diff selections', async () => {
+    it('shares repository comments between different diff selections', async () => {
       const importServer = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
         preferredPort: 9039,
@@ -1205,7 +1205,8 @@ describe('Server Integration Tests', () => {
 
       response = await fetch(`http://localhost:${importServer.port}/api/comments-output`);
       output = await response.text();
-      expect(output).toBe('');
+      expect(output).toContain('Startup comment');
+      expect(output).toContain('API comment');
 
       await fetch(`http://localhost:${importServer.port}/api/comment-imports`, {
         method: 'POST',
@@ -1223,8 +1224,8 @@ describe('Server Integration Tests', () => {
       response = await fetch(`http://localhost:${importServer.port}/api/comments-output`);
       output = await response.text();
       expect(output).toContain('Other diff comment');
-      expect(output).not.toContain('Startup comment');
-      expect(output).not.toContain('API comment');
+      expect(output).toContain('Startup comment');
+      expect(output).toContain('API comment');
 
       await fetch(`http://localhost:${importServer.port}/api/diff?base=HEAD%5E&target=HEAD`);
 
@@ -1232,7 +1233,7 @@ describe('Server Integration Tests', () => {
       output = await response.text();
       expect(output).toContain('Startup comment');
       expect(output).toContain('API comment');
-      expect(output).not.toContain('Other diff comment');
+      expect(output).toContain('Other diff comment');
     });
 
     it.skip('GET /api/heartbeat returns SSE headers', async () => {
