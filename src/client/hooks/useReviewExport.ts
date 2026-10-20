@@ -57,13 +57,16 @@ export function useReviewExport(options: ReviewExportOptions) {
     setSucceeded(false);
     setError(null);
     let exported = false;
+    let capturingContext = false;
     const originalThreads = JSON.stringify(threads);
     const isOrigin = () => currentRef.current.context === context;
     try {
-      const hostContext = handoff ? captureReviewHandoffContext() : undefined;
       const text = formatReviewExport(prompt, settings.template);
+      capturingContext = handoff;
+      const hostContext = handoff ? captureReviewHandoffContext() : undefined;
       if (handoff) {
         const capturedHostContext = await hostContext;
+        capturingContext = false;
         const snapshot = {
           selection,
           resolvedSelection,
@@ -107,7 +110,12 @@ export function useReviewExport(options: ReviewExportOptions) {
         );
       }
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Could not export the review.';
+      if (capturingContext) console.error('Could not capture review handoff context:', cause);
+      const message = capturingContext
+        ? 'Could not prepare the review for the agent. Your comments have been kept.'
+        : cause instanceof Error
+          ? cause.message
+          : 'Could not export the review.';
       setError(exported ? `Review exported, but cleanup failed: ${message}` : message);
     } finally {
       busyRef.current = false;

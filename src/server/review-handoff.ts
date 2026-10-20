@@ -42,7 +42,7 @@ export function registerReviewHandoff(
 
   app.get('/api/review-handoff', (_req, res) => {
     if (!options.enabled) {
-      res.status(409).json({ error: 'Start difit with --agent-handoff first.' });
+      res.status(409).json({ error: 'Agent handoff is not enabled.' });
       return;
     }
     if (receiver || pending?.claimed) {
@@ -97,7 +97,7 @@ export function registerReviewHandoff(
       const timeout = setTimeout(() => {
         if (pending?.response === res) pending = null;
         res.status(408).json({
-          error: 'No agent acknowledged the review. Start difit review wait and try again.',
+          error: 'The agent did not acknowledge the review. Your comments have been kept.',
         });
       }, 120_000);
       res.on('close', () => {
