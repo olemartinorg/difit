@@ -616,7 +616,60 @@ describe('App Component - Comment sync', () => {
     });
   });
 
-  it('keeps a local reply when an earlier comment refresh finishes afterwards', async () => {
+  it('replays a remote change received while a local sync response is pending', async () => {
+    const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
+    mockComments = [root];
+    const { rerender } = renderApp();
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
+    await act(async () => {});
+    mockReplaceThreads.mockClear();
+    const originalFetch = vi.mocked(global.fetch).getMockImplementation()!;
+    let finish: ((value: Response) => void) | undefined;
+    const remote = createMockThread({
+      id: 'remote',
+      filePath: 'test.ts',
+      line: 20,
+      body: 'Agent added this',
+    });
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/comments-json'))
+        return Promise.resolve(
+          new Response(JSON.stringify({ version: 3, threads: [...mockComments, remote] }), {
+            status: 200,
+          }),
+        );
+      if (String(input).startsWith('/api/comments?') && init?.method === 'POST')
+        return new Promise<Response>((resolve) => {
+          finish = resolve;
+        });
+      return originalFetch(input, init);
+    });
+    mockComments = [
+      {
+        ...root,
+        messages: [...root.messages, { ...root.messages[0]!, id: 'local', body: 'Local reply' }],
+      },
+    ];
+    rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>,
+    );
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    await act(async () => {
+      await mockCommentsChanged?.();
+    });
+    await act(async () => {
+      finish?.(
+        new Response(JSON.stringify({ version: 2, merged: false, threads: mockComments }), {
+          status: 200,
+        }),
+      );
+    });
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([...mockComments, remote]));
+  });
+
+  it('refreshes again without dropping a local reply when an earlier read finishes afterwards', async () => {
     const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
     mockComments = [root];
     const { rerender } = renderApp();
@@ -624,11 +677,31 @@ describe('App Component - Comment sync', () => {
     mockReplaceThreads.mockClear();
     const originalFetch = vi.mocked(global.fetch).getMockImplementation()!;
     let finish: ((value: Response) => void) | undefined;
+    let reads = 0;
+    const remote = createMockThread({
+      id: 'remote',
+      filePath: 'test.ts',
+      line: 20,
+      body: 'Agent added this',
+    });
     vi.mocked(global.fetch).mockImplementation((input, init) => {
-      if (String(input).startsWith('/api/comments-json'))
-        return new Promise<Response>((resolve) => {
-          finish = resolve;
-        });
+      if (String(input).startsWith('/api/comments-json')) {
+        reads++;
+        if (reads === 1) {
+          return new Promise<Response>((resolve) => {
+            finish = resolve;
+          });
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              version: 3,
+              threads: [...mockComments, remote],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
       return originalFetch(input, init);
     });
     let refreshing: Promise<void> | undefined;
@@ -650,7 +723,8 @@ describe('App Component - Comment sync', () => {
       finish?.(new Response(JSON.stringify({ version: 1, threads: [root] }), { status: 200 }));
       await refreshing;
     });
-    expect(mockReplaceThreads).not.toHaveBeenCalled();
+    expect(mockReplaceThreads).not.toHaveBeenCalledWith([root]);
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([...mockComments, remote]));
   });
 
   it('sends an empty comment list on unload when no comments remain', async () => {
