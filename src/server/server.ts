@@ -122,10 +122,6 @@ function createResolvedCommentSelection(
   return createDiffSelection(baseCommitish, targetCommitish, baseMode);
 }
 
-function createCommentSessionKey(selection: DiffSelection): string {
-  return getDiffSelectionKey(selection);
-}
-
 export async function startServer(
   options: ServerOptions,
 ): Promise<{ port: number; url: string; isEmpty?: boolean; server?: Server }> {
@@ -260,14 +256,12 @@ export async function startServer(
     };
   }
 
-  const commentSessions = new Map<string, CommentSessionState>();
+  // A review belongs to this repository, independent of the displayed comparison.
   const initialCommentThreads = mergeCommentImports([], initialCommentImports).threads;
-  if (initialCommentThreads.length > 0) {
-    commentSessions.set(createCommentSessionKey(currentCommentSelection), {
-      threads: initialCommentThreads,
-      version: 1,
-    });
-  }
+  const commentSession: CommentSessionState = {
+    threads: initialCommentThreads,
+    version: initialCommentThreads.length > 0 ? 1 : 0,
+  };
 
   function getCommentSelectionFromQuery(query: Record<string, unknown>): DiffSelection {
     const hasBase = typeof query.base === 'string';
@@ -289,19 +283,8 @@ export async function startServer(
     );
   }
 
-  function getOrCreateCommentSession(selection: DiffSelection): CommentSessionState {
-    const key = createCommentSessionKey(selection);
-    const existing = commentSessions.get(key);
-    if (existing) {
-      return existing;
-    }
-
-    const nextSession: CommentSessionState = {
-      threads: [],
-      version: 0,
-    };
-    commentSessions.set(key, nextSession);
-    return nextSession;
+  function getOrCreateCommentSession(_selection: DiffSelection): CommentSessionState {
+    return commentSession;
   }
 
   app.get('/api/diff', async (req, res) => {

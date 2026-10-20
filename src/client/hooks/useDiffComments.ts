@@ -4,7 +4,6 @@ import {
   type BaseMode,
   type CommentImport,
   type CommentThread,
-  type DiffContextStorage,
   type DiffCommentThread,
   type DiffSide,
   type LegacyDiffComment,
@@ -16,7 +15,7 @@ import {
 } from '../../utils/commentFormatting';
 import { createId } from '../../utils/createId';
 import { mergeCommentImports } from '../../utils/commentImports';
-import { storageService } from '../services/StorageService';
+import { loadReviewComments, saveReviewComments } from '../services/reviewComments';
 import { getLanguageFromPath } from '../utils/diffUtils';
 
 interface AddThreadParams {
@@ -87,94 +86,35 @@ function normalizeRootComment(thread: DiffCommentThread): LegacyDiffComment | nu
 export function useDiffComments(
   baseCommitish?: string,
   targetCommitish?: string,
-  currentCommitHash?: string,
-  branchToHash?: Map<string, string>,
+  _currentCommitHash?: string,
+  _branchToHash?: Map<string, string>,
   repositoryId?: string,
-  baseMode?: BaseMode,
+  _baseMode?: BaseMode,
 ): UseDiffCommentsReturn {
   const [threads, setThreads] = useState<DiffCommentThread[]>([]);
   const [hasLoadedComments, setHasLoadedComments] = useState(false);
 
-  const loadDiffContextData = useCallback(() => {
-    if (!baseCommitish || !targetCommitish) {
-      return null;
-    }
-
-    return storageService.getDiffContextData(
-      baseCommitish,
-      targetCommitish,
-      currentCommitHash,
-      branchToHash,
-      repositoryId,
-      baseMode,
-    );
-  }, [baseCommitish, targetCommitish, currentCommitHash, branchToHash, repositoryId, baseMode]);
-
-  const createEmptyDiffContext = useCallback((): DiffContextStorage | null => {
-    if (!baseCommitish || !targetCommitish) {
-      return null;
-    }
-
-    const now = new Date().toISOString();
-    return {
-      version: 2,
-      baseCommitish,
-      targetCommitish,
-      baseMode,
-      createdAt: now,
-      lastModifiedAt: now,
-      threads: [],
-      viewedFiles: [],
-      appliedCommentImportIds: [],
-    };
-  }, [baseCommitish, targetCommitish, baseMode]);
+  const ready = Boolean(baseCommitish && targetCommitish);
+  const loadComments = useCallback(() => loadReviewComments(repositoryId), [repositoryId]);
 
   useEffect(() => {
-    if (!baseCommitish || !targetCommitish) {
+    if (!ready) {
       setThreads([]);
       setHasLoadedComments(false);
       return;
     }
-
-    const loadedThreads =
-      loadDiffContextData()?.threads ||
-      storageService.getCommentThreads(
-        baseCommitish,
-        targetCommitish,
-        currentCommitHash,
-        branchToHash,
-        repositoryId,
-        baseMode,
-      );
-    setThreads(loadedThreads);
+    setThreads(loadComments().threads);
     setHasLoadedComments(true);
-  }, [
-    baseCommitish,
-    targetCommitish,
-    currentCommitHash,
-    branchToHash,
-    repositoryId,
-    baseMode,
-    loadDiffContextData,
-  ]);
+  }, [ready, loadComments]);
 
   const saveThreads = useCallback(
     (newThreads: DiffCommentThread[]) => {
-      if (!baseCommitish || !targetCommitish) return;
-
-      storageService.saveCommentThreads(
-        baseCommitish,
-        targetCommitish,
-        newThreads,
-        currentCommitHash,
-        branchToHash,
-        repositoryId,
-        baseMode,
-      );
+      if (!ready) return;
+      saveReviewComments({ ...loadComments(), threads: newThreads }, repositoryId);
       setThreads(newThreads);
       setHasLoadedComments(true);
     },
-    [baseCommitish, targetCommitish, currentCommitHash, branchToHash, repositoryId, baseMode],
+    [ready, loadComments, repositoryId],
   );
 
   const replaceThreads = useCallback(
@@ -339,86 +279,32 @@ export function useDiffComments(
         return;
       }
 
-      const existingData = loadDiffContextData() || createEmptyDiffContext();
-      if (!existingData || !baseCommitish || !targetCommitish) {
-        return;
-      }
-
-      const nextData: DiffContextStorage = {
-        ...existingData,
-        threads: [],
-        appliedCommentImportIds: [],
-      };
-
-      storageService.saveDiffContextData(
-        baseCommitish,
-        targetCommitish,
-        nextData,
-        currentCommitHash,
-        branchToHash,
-        repositoryId,
-        baseMode,
-      );
+      saveReviewComments({ threads: [], appliedCommentImportIds: [] }, repositoryId);
       setThreads([]);
     },
-    [
-      baseCommitish,
-      targetCommitish,
-      branchToHash,
-      clearAllComments,
-      createEmptyDiffContext,
-      currentCommitHash,
-      loadDiffContextData,
-      repositoryId,
-      baseMode,
-    ],
+    [clearAllComments, repositoryId],
   );
 
   const applyCommentImports = useCallback(
     (imports: CommentImport[], importId: string): string[] => {
-      if (!baseCommitish || !targetCommitish || imports.length === 0 || importId.length === 0) {
-        return [];
-      }
-
-      const existingData = loadDiffContextData() || createEmptyDiffContext();
-      if (!existingData) {
-        return [];
-      }
-
+      if (!ready || imports.length === 0 || importId.length === 0) return [];
+      const existingData = loadComments();
       if (existingData.appliedCommentImportIds.includes(importId)) {
         setThreads(existingData.threads);
         return [];
       }
-
       const merged = mergeCommentImports(existingData.threads, imports);
-      const nextData: DiffContextStorage = {
-        ...existingData,
-        threads: merged.threads,
-        appliedCommentImportIds: [...existingData.appliedCommentImportIds, importId],
-      };
-
-      storageService.saveDiffContextData(
-        baseCommitish,
-        targetCommitish,
-        nextData,
-        currentCommitHash,
-        branchToHash,
+      saveReviewComments(
+        {
+          threads: merged.threads,
+          appliedCommentImportIds: [...existingData.appliedCommentImportIds, importId],
+        },
         repositoryId,
-        baseMode,
       );
       setThreads(merged.threads);
       return merged.warnings;
     },
-    [
-      baseCommitish,
-      targetCommitish,
-      branchToHash,
-      createEmptyDiffContext,
-      currentCommitHash,
-      loadDiffContextData,
-      repositoryId,
-      baseMode,
-    ],
+    [ready, loadComments, repositoryId],
   );
 
   const generateThreadPrompt = useCallback(

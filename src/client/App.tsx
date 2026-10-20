@@ -224,10 +224,10 @@ function App() {
       return null;
     }
 
-    return `${diffData?.repositoryId ?? 'default'}:${resolvedSelectionKey}`;
+    return diffData?.repositoryId ?? 'default';
   }, [diffData?.repositoryId, resolvedSelectionKey]);
-  const currentReviewRef = useRef({ key: commentsContextKey, commit: diffData?.commit });
-  currentReviewRef.current = { key: commentsContextKey, commit: diffData?.commit };
+  const currentReviewRef = useRef({ key: resolvedSelectionKey, commit: diffData?.commit });
+  currentReviewRef.current = { key: resolvedSelectionKey, commit: diffData?.commit };
   const commentSessionQueryString = useMemo(() => {
     if (!resolvedSelection) {
       return null;
@@ -341,7 +341,7 @@ function App() {
   const resetViewedProgress = async () => {
     await clearViewedFiles(true);
     if (
-      currentReviewRef.current.key !== commentsContextKey ||
+      currentReviewRef.current.key !== resolvedSelectionKey ||
       currentReviewRef.current.commit !== diffData?.commit
     )
       return;

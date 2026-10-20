@@ -1,11 +1,9 @@
-import type { DiffCommentThread, DiffSelection } from '../../types/diff';
-import { storageService } from './StorageService';
+import type { DiffCommentThread } from '../../types/diff';
+import { loadReviewComments, saveReviewComments } from './reviewComments';
 
 export async function clearExportedComments(
   snapshot: {
     url: string;
-    selection: DiffSelection;
-    commit: string;
     repositoryId?: string;
     threads: DiffCommentThread[];
     baseVersion: number | null;
@@ -32,24 +30,9 @@ export async function clearExportedComments(
     throw new Error(payload.error ?? 'Could not clear review comments.');
   }
   const { version } = (await response.json()) as { version: number };
-  const stored = storageService.getDiffContextData(
-    snapshot.selection.baseCommitish,
-    snapshot.selection.targetCommitish,
-    snapshot.commit,
-    undefined,
-    snapshot.repositoryId,
-    snapshot.selection.baseMode,
-  );
-  if (!stored || JSON.stringify(stored.threads) === JSON.stringify(snapshot.threads)) {
-    storageService.saveCommentThreads(
-      snapshot.selection.baseCommitish,
-      snapshot.selection.targetCommitish,
-      [],
-      snapshot.commit,
-      undefined,
-      snapshot.repositoryId,
-      snapshot.selection.baseMode,
-    );
+  const stored = loadReviewComments(snapshot.repositoryId);
+  if (JSON.stringify(stored.threads) === JSON.stringify(snapshot.threads)) {
+    saveReviewComments({ ...stored, threads: [] }, snapshot.repositoryId);
   }
   onCleared(version);
 }

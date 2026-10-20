@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import type { DiffCommentThread, DiffResponse, DiffSelection } from '../../types/diff';
 import type { CommentPromptDiffContext } from '../../utils/commentFormatting';
-import { getDiffSelectionKey, normalizeBaseMode } from '../../utils/diffSelection';
+import { normalizeBaseMode } from '../../utils/diffSelection';
 import {
   DEFAULT_REVIEW_SETTINGS,
   formatReviewExport,
@@ -29,9 +29,7 @@ interface ReviewExportOptions {
 
 export function useReviewExport(options: ReviewExportOptions) {
   const { diff, selection, resolvedSelection, threads, settings } = options;
-  const context = resolvedSelection
-    ? `${diff?.repositoryId}:${getDiffSelectionKey(resolvedSelection)}:${diff?.commit}`
-    : '';
+  const context = diff?.repositoryId ?? '';
   const currentRef = useRef({ context, threads });
   currentRef.current = { context, threads };
   const busyRef = useRef(false);
@@ -96,8 +94,6 @@ export function useReviewExport(options: ReviewExportOptions) {
         await clearExportedComments(
           {
             url: options.commentsUrl,
-            selection: resolvedSelection,
-            commit: diff.commit,
             repositoryId: diff.repositoryId,
             threads,
             baseVersion: options.commentVersion,
