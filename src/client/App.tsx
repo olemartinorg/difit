@@ -219,6 +219,10 @@ function App() {
     resolvedSelection?.baseMode,
   );
 
+  const latestThreadsRef = useRef(threads);
+  latestThreadsRef.current = threads;
+  const pendingCommentSyncRef = useRef(0);
+
   const commentsContextKey = useMemo(() => {
     if (!resolvedSelectionKey) {
       return null;
@@ -278,42 +282,54 @@ function App() {
       threads?: DiffCommentThread[];
     };
     if (typeof payload.version === 'number') {
-      serverCommentVersionRef.current = payload.version;
+      serverCommentVersionRef.current = Math.max(
+        serverCommentVersionRef.current ?? 0,
+        payload.version,
+      );
     }
     return Array.isArray(payload.threads) ? payload.threads : [];
   }, [getCommentApiUrl]);
 
   const syncThreadsToServer = useCallback(
     async (nextThreads: DiffCommentThread[]) => {
-      const generation = reviewReset.generationRef.current;
-      const response = await fetch(getCommentApiUrl('/api/comments'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          threads: nextThreads,
-          baseVersion: serverCommentVersionRef.current ?? undefined,
-        }),
-      });
-      if (!response.ok) {
-        return;
-      }
+      pendingCommentSyncRef.current++;
+      try {
+        const generation = reviewReset.generationRef.current;
+        const response = await fetch(getCommentApiUrl('/api/comments'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            threads: nextThreads,
+            baseVersion: serverCommentVersionRef.current ?? undefined,
+          }),
+        });
+        if (!response.ok) {
+          return;
+        }
 
-      const result = (await response.json()) as {
-        version?: number;
-        merged?: boolean;
-        threads?: DiffCommentThread[];
-      };
-      if (typeof result.version === 'number') {
-        serverCommentVersionRef.current = result.version;
-      }
-      // Server merged in a concurrent change; adopt it so we don't push a stale set back.
-      if (
-        generation === reviewReset.generationRef.current &&
-        result.merged &&
-        Array.isArray(result.threads)
-      ) {
-        skipNextCommentSyncRef.current = true;
-        replaceThreads(result.threads);
+        const result = (await response.json()) as {
+          version?: number;
+          merged?: boolean;
+          threads?: DiffCommentThread[];
+        };
+        if (typeof result.version === 'number') {
+          serverCommentVersionRef.current = Math.max(
+            serverCommentVersionRef.current ?? 0,
+            result.version,
+          );
+        }
+        // Server merged in a concurrent change; adopt it so we don't push a stale set back.
+        if (
+          generation === reviewReset.generationRef.current &&
+          result.merged &&
+          latestThreadsRef.current === nextThreads &&
+          Array.isArray(result.threads)
+        ) {
+          skipNextCommentSyncRef.current = true;
+          replaceThreads(result.threads);
+        }
+      } finally {
+        pendingCommentSyncRef.current--;
       }
     },
     [getCommentApiUrl, replaceThreads, reviewReset.generationRef],
@@ -637,10 +653,19 @@ function App() {
     if (!handled) await fetchDiffDataRef.current?.();
   }, []);
   const handleCommentsChanged = useCallback(async () => {
+    if (pendingCommentSyncRef.current > 0) return;
+    const originalThreads = latestThreadsRef.current;
     const generation = reviewReset.generationRef.current;
     try {
       const serverThreads = await fetchServerThreads();
-      if (generation !== reviewReset.generationRef.current) return;
+      // A local edit made while this read was pending has its own sync request.
+      // Adopting this older snapshot would erase the edit before it can settle.
+      if (
+        generation !== reviewReset.generationRef.current ||
+        latestThreadsRef.current !== originalThreads ||
+        pendingCommentSyncRef.current > 0
+      )
+        return;
       skipNextCommentSyncRef.current = true;
       replaceThreads(serverThreads);
       if (commentsContextKey) {
