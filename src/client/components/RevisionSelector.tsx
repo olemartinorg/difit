@@ -82,10 +82,6 @@ export function RevisionSelector({
     role,
   ]);
 
-  // Check if the current value is 'working' or 'staged' special case
-  const isWorkingStagedMode =
-    (value === 'working' && disabledValues.includes('staged')) ||
-    (value === 'staged' && disabledValues.includes('working'));
   const visibleSpecialOptions = options.specialOptions.filter(
     (opt) => !RESERVED_SPECIAL_OPTION_VALUES.has(opt.value),
   );
@@ -121,14 +117,10 @@ export function RevisionSelector({
   const filteredSpecialOptions = visibleSpecialOptions.filter((opt) =>
     matchesQuery(opt.label, opt.value),
   );
-  const filteredCommits = isWorkingStagedMode
-    ? []
-    : options.commits.filter((commit) =>
-        matchesQuery(commit.shortHash, commit.hash, commit.message),
-      );
-  const filteredBranches = isWorkingStagedMode
-    ? []
-    : options.branches.filter((branch) => matchesQuery(branch.name));
+  const filteredCommits = options.commits.filter((commit) =>
+    matchesQuery(commit.shortHash, commit.hash, commit.message),
+  );
+  const filteredBranches = options.branches.filter((branch) => matchesQuery(branch.name));
 
   const hasNoMatches =
     filteredSpecialOptions.length === 0 &&
@@ -244,7 +236,7 @@ export function RevisionSelector({
                 </div>
               )}
 
-              {/* Recent Commits - hide in working/staged mode */}
+              {/* Recent Commits */}
               {filteredCommits.length > 0 && (
                 <div className="border-b border-github-border">
                   <div className="px-3 py-2 text-xs font-semibold text-github-text-secondary bg-github-bg-tertiary">
@@ -273,7 +265,7 @@ export function RevisionSelector({
                 </div>
               )}
 
-              {/* Branches - hide in working/staged mode */}
+              {/* Branches */}
               {filteredBranches.length > 0 && (
                 <div>
                   <div className="px-3 py-2 text-xs font-semibold text-github-text-secondary bg-github-bg-tertiary">

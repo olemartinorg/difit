@@ -30,6 +30,16 @@ export function RevisionDetailModal({
   const { enableScope, disableScope } = useHotkeysContext();
   const localBase = localSelection.baseCommitish;
   const localTarget = localSelection.targetCommitish;
+  const selectionError =
+    localBase === 'working' || localBase === '.'
+      ? 'Choose a commit as Base. Working Directory and All Uncommitted Changes are only supported as Target.'
+      : localBase === 'staged' && localTarget !== 'working'
+        ? 'Staging Area as Base requires Working Directory as Target.'
+        : localBase === localTarget
+          ? 'Choose different Base and Target revisions.'
+          : localTarget === 'working' && localBase && localBase !== 'staged'
+            ? 'Working Directory shows unstaged changes against Staging Area. Choose Staging Area as Base, or All Uncommitted Changes as Target to compare with a commit.'
+            : null;
 
   useEffect(() => {
     setLocalSelection(selection);
@@ -81,6 +91,7 @@ export function RevisionDetailModal({
   if (!isOpen) return null;
 
   const handleApply = () => {
+    if (selectionError) return;
     onApply(createDiffSelection(localSelection.baseCommitish, localSelection.targetCommitish));
     onClose();
   };
@@ -123,6 +134,11 @@ export function RevisionDetailModal({
               disabledValues={targetDisabledValues}
             />
           </div>
+          {selectionError && (
+            <p role="alert" className="text-xs text-github-text-secondary">
+              {selectionError}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <button
               onClick={onClose}
@@ -133,7 +149,8 @@ export function RevisionDetailModal({
             </button>
             <button
               onClick={handleApply}
-              className="px-3 py-1.5 text-xs font-medium rounded bg-github-accent text-white hover:bg-github-accent/90 transition-colors"
+              disabled={selectionError !== null}
+              className="px-3 py-1.5 text-xs font-medium rounded bg-github-accent text-white hover:bg-github-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               type="button"
             >
               Apply
