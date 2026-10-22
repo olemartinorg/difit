@@ -43,20 +43,26 @@ export function registerReviewStore(
     const base =
       selection?.baseCommitish ??
       (typeof request.query.base === 'string' ? request.query.base : undefined);
-    const baseHead =
+    let baseHead =
       base && !['.', 'working', 'staged'].includes(base)
         ? (await git.revparse([`${base}^{commit}`])).trim()
         : undefined;
+    if (baseHead && selection?.baseMode === 'merge-base')
+      baseHead = (await git.raw(['merge-base', head, baseHead])).trim();
     const unpublished = await git
       .raw(['rev-list', '--count', `${branch}@{upstream}..${head}`])
       .then(
         (value) => Number(value.trim()) > 0,
         () => true,
       );
-    const subject: ReviewSubject =
+    const captured: ReviewSubject =
       typeof request.query.reviewSubject === 'string'
         ? (JSON.parse(request.query.reviewSubject) as ReviewSubject)
         : { repository: options.repoPath, branch, head, base, baseHead, working, unpublished };
+    const subject: ReviewSubject = {
+      ...captured,
+      ...(selection ? { base, baseHead, comparisonHead: head, working } : {}),
+    };
     if (
       typeof subject.repository !== 'string' ||
       typeof subject.branch !== 'string' ||

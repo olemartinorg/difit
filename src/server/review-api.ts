@@ -3,6 +3,7 @@ import type { Express } from 'express';
 import type { DiffSelection } from '../types/diff.js';
 import { getEmptyReviewSelection } from '../utils/reviewSelection.js';
 import type { ReviewDiffParser } from './review-diff.js';
+import type { ReviewSubject } from './review-store.js';
 import { ReviewInventoryService } from './review-inventory.js';
 import { readUserConfig, updateUserClientSettings } from './user-config.js';
 
@@ -15,17 +16,53 @@ export class ReviewApi {
     private readonly parser: ReviewDiffParser,
     private readonly reviewByDefault: boolean,
     private readonly importedDiff: boolean,
+    private readonly reviewedBranch?: string,
   ) {
     this.inventory = new ReviewInventoryService(repositoryPath, parser);
   }
 
-  private async getInventory(target?: string, ignoreWhitespace = false) {
+  private async getInventory(
+    target?: string,
+    ignoreWhitespace = false,
+    reviewedBranch = this.reviewedBranch,
+    subject?: ReviewSubject,
+  ) {
     const config = await readUserConfig();
     const targets = config.client.reviewTargets as Record<string, string> | undefined;
+    const savedTarget = targets?.[`${this.repositoryId}:${reviewedBranch ?? 'HEAD'}`];
+    const capturedBase = subject?.pullRequest?.baseHead ?? subject?.baseHead ?? subject?.base;
+    const selectedTarget = target ?? savedTarget ?? capturedBase;
     const inventory = await this.inventory.getInventory(
-      target ?? targets?.[this.repositoryId],
+      selectedTarget,
       ignoreWhitespace,
+      reviewedBranch,
+      subject?.head,
     );
+    if (selectedTarget && inventory.target === selectedTarget) {
+      inventory.baseSuggestion = {
+        ref: selectedTarget,
+        reason: target
+          ? 'Selected comparison base'
+          : savedTarget
+            ? 'Saved comparison base for this branch'
+            : subject?.pullRequest
+              ? `Pull request target: ${subject.pullRequest.base}`
+              : 'Comparison base captured for this review',
+        ambiguous: false,
+        candidates: [selectedTarget],
+      };
+    }
+    const pullRequest = subject?.pullRequest;
+    if (
+      pullRequest?.baseHead &&
+      !inventory.targetOptions.some((option) => option.name === pullRequest.baseHead)
+    ) {
+      inventory.targetOptions.unshift({
+        name: pullRequest.baseHead,
+        label: `${pullRequest.base} (${pullRequest.baseHead.slice(0, 7)})`,
+        kind: 'remote',
+      });
+    }
     inventory.reviewByDefault = this.reviewByDefault;
     return inventory;
   }
@@ -46,6 +83,10 @@ export class ReviewApi {
         const inventory = await this.getInventory(
           typeof req.query.target === 'string' ? req.query.target : undefined,
           req.query.ignoreWhitespace === 'true',
+          typeof req.query.reviewBranch === 'string' ? req.query.reviewBranch : undefined,
+          typeof req.query.reviewSubject === 'string'
+            ? (JSON.parse(req.query.reviewSubject) as ReviewSubject)
+            : undefined,
         );
         res.json(inventory);
       } catch (error) {
@@ -62,13 +103,24 @@ export class ReviewApi {
         return;
       }
       try {
-        const inventory = await this.inventory.getInventory(body.target);
+        const branch =
+          typeof req.query.reviewBranch === 'string' ? req.query.reviewBranch : this.reviewedBranch;
+        const subject =
+          typeof req.query.reviewSubject === 'string'
+            ? (JSON.parse(req.query.reviewSubject) as ReviewSubject)
+            : undefined;
+        const inventory = await this.inventory.getInventory(
+          body.target,
+          false,
+          branch,
+          subject?.head,
+        );
         if (inventory.target !== body.target)
           throw new Error(`Target branch does not exist: ${body.target}`);
         const config = await readUserConfig();
         const targets = config.client.reviewTargets as Record<string, string> | undefined;
         await updateUserClientSettings({
-          reviewTargets: { ...targets, [this.repositoryId]: body.target },
+          reviewTargets: { ...targets, [`${this.repositoryId}:${branch ?? 'HEAD'}`]: body.target },
         });
         onTargetChange();
         res.json({ ok: true });

@@ -761,16 +761,7 @@ export class GitDiffParser {
         return match[1];
       }
     } catch {
-      // If origin/HEAD is not set, fall back to common default branches
-      const commonDefaults = ['main', 'master'];
-      const branchResult = await this.git.branchLocal();
-      const branchNames = Object.keys(branchResult.branches);
-
-      for (const defaultName of commonDefaults) {
-        if (branchNames.includes(defaultName)) {
-          return defaultName;
-        }
-      }
+      /* A missing remote default remains unknown. */
     }
     return null;
   }
@@ -783,17 +774,7 @@ export class GitDiffParser {
         return `origin/${match[1]}`;
       }
     } catch {
-      const commonDefaults = ['main', 'master'];
-
-      for (const defaultName of commonDefaults) {
-        try {
-          // No --quiet as simple-git success depends on stderr and that resolves wrong remotes
-          await this.git.raw(['show-ref', '--verify', `refs/remotes/origin/${defaultName}`]);
-          return `origin/${defaultName}`;
-        } catch {
-          // Ignore missing refs and continue checking common defaults.
-        }
-      }
+      /* A missing remote default remains unknown. */
     }
 
     return null;

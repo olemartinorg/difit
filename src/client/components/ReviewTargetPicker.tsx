@@ -38,7 +38,10 @@ export function ReviewTargetPicker({
       targets
         .filter(
           (option) =>
-            option.kind === kind && option.name.toLowerCase().includes(query.trim().toLowerCase()),
+            option.kind === kind &&
+            `${option.name} ${option.label ?? ''}`
+              .toLowerCase()
+              .includes(query.trim().toLowerCase()),
         )
         .sort(
           (left, right) =>
@@ -80,7 +83,9 @@ export function ReviewTargetPicker({
         }}
       >
         <span className="text-github-text-muted">Target</span>
-        <span className="truncate">{target ?? 'Choose branch'}</span>
+        <span className="truncate">
+          {targets.find((option) => option.name === target)?.label ?? target ?? 'Choose branch'}
+        </span>
         <ChevronDown size={12} className="shrink-0" />
       </button>
       {open && (
@@ -152,7 +157,7 @@ export function ReviewTargetPicker({
                   onClick={() => choose(option.name)}
                   className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-github-text-primary hover:bg-github-bg-tertiary"
                 >
-                  <span className="min-w-0 flex-1 truncate">{option.name}</span>
+                  <span className="min-w-0 flex-1 truncate">{option.label ?? option.name}</span>
                   {option.name === target && <Check size={12} className="shrink-0" />}
                 </button>
               </li>

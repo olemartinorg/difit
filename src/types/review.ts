@@ -17,11 +17,14 @@ export interface ReviewCommit extends CommitInfo {
 export interface ReviewTarget {
   name: string;
   kind: 'remote' | 'local';
+  label?: string;
 }
 
 export interface ReviewInventory {
   repositoryId: string;
   branch: string;
+  reviewedBranch?: string;
+  baseSuggestion?: { ref?: string; reason: string; ambiguous: boolean; candidates: string[] };
   head: string;
   target?: string;
   targetHash?: string;

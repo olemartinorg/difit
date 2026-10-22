@@ -1,9 +1,33 @@
+import { ReviewInventoryService } from '../server/review-inventory.js';
 import { Command, Option } from 'commander';
 
 import type { ReviewSubmission } from '../types/reviewSubmission.js';
 
 export function createReviewCommand(): Command {
   const review = new Command('review').description('Receive an explicitly submitted review');
+  review
+    .command('inventory')
+    .description('Inspect a branch without checkout')
+    .option('--branch <name>', 'reviewed branch name')
+    .option('--head <oid>', 'immutable reviewed commit')
+    .option('--base <ref>', 'explicit comparison base')
+    .action(async (options: { branch?: string; head?: string; base?: string }) => {
+      try {
+        console.log(
+          JSON.stringify(
+            await new ReviewInventoryService(process.cwd()).getInventory(
+              options.base,
+              false,
+              options.branch,
+              options.head,
+            ),
+          ),
+        );
+      } catch (error) {
+        console.error(String(error));
+        process.exitCode = 1;
+      }
+    });
   review
     .command('wait')
     .description('Wait for Pass review to agent, write one review to stdout, and exit')

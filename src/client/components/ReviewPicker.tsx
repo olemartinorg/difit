@@ -271,6 +271,14 @@ export function ReviewPicker({
                   onChange={onTargetChange}
                 />
               </div>
+              {inventory.baseSuggestion && (
+                <p className="mb-3 text-xs text-github-text-secondary">
+                  {inventory.baseSuggestion.reason}
+                  {inventory.baseSuggestion.ambiguous
+                    ? '. Choose the comparison base if this suggestion is wrong.'
+                    : ''}
+                </p>
+              )}
               {inventory.uncommitted && (
                 <div
                   className="flex items-center gap-2 border-y border-github-border py-3"

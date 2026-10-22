@@ -20,6 +20,7 @@ export interface ReviewSubject {
   head: string;
   base?: string;
   baseHead?: string;
+  comparisonHead?: string;
   pullRequest?: { number: number; url: string; head: string; base: string; baseHead?: string };
   unpublished?: boolean;
   working?: boolean;
