@@ -1,3 +1,4 @@
+import { createConnection } from 'node:net';
 import { ReviewInventoryService } from '../server/review-inventory.js';
 import { Command, Option } from 'commander';
 
@@ -5,6 +6,55 @@ import type { ReviewSubmission } from '../types/reviewSubmission.js';
 
 export function createReviewCommand(): Command {
   const review = new Command('review').description('Receive an explicitly submitted review');
+  const querySubmitted = (repository: string, id?: string) =>
+    new Promise<unknown>((resolve, reject) => {
+      const socket = createConnection('/run/sandbox-github/hint.sock');
+      let data = '';
+      socket.setTimeout(10000, () => socket.destroy(new Error('Submitted review query timed out')));
+      socket.on('error', reject);
+      socket.on('connect', () =>
+        socket.write(
+          JSON.stringify({ kind: 'submitted-reviews', repository, ...(id ? { id } : {}) }) + '\n',
+        ),
+      );
+      socket.on('data', (chunk) => {
+        data += chunk.toString('utf8');
+      });
+      socket.on('end', () => {
+        try {
+          const payload = JSON.parse(data) as { result?: unknown; error?: string };
+          if (payload.error) reject(new Error(payload.error));
+          else resolve(payload.result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  review
+    .command('list')
+    .description('List submitted feedback for this task repository, without opening a view')
+    .requiredOption('--repository <name>', 'task repository name')
+    .action(async (options: { repository: string }) => {
+      try {
+        console.log(JSON.stringify(await querySubmitted(options.repository)));
+      } catch (error) {
+        console.error(String(error));
+        process.exitCode = 1;
+      }
+    });
+  review
+    .command('get')
+    .description('Retrieve an immutable submitted review and its delivery receipt')
+    .argument('<id>', 'submission ID')
+    .requiredOption('--repository <name>', 'task repository name')
+    .action(async (id: string, options: { repository: string }) => {
+      try {
+        console.log(JSON.stringify(await querySubmitted(options.repository, id)));
+      } catch (error) {
+        console.error(String(error));
+        process.exitCode = 1;
+      }
+    });
   review
     .command('inventory')
     .description('Inspect a branch without checkout')
