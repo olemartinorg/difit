@@ -243,7 +243,15 @@ describe('host review ownership', () => {
     writeFileSync(join(root, 'file'), 'second feature\n');
     git('commit', '-qam', 'second feature');
     const nextHead = git('rev-parse', 'HEAD');
-    const next = await store.resolve(root, {
+    const local = await store.resolve(root, {
+      repository: 'repo',
+      branch: 'work',
+      head: nextHead,
+    });
+    expect(local.id).toBe(review.id);
+    expect(local.subject.pullRequest).toBeUndefined();
+    const restarted = new ReviewStore(join(root, 'store'), 'owner');
+    const next = await restarted.resolve(root, {
       repository: 'repo',
       branch: 'work',
       head: nextHead,
@@ -256,7 +264,44 @@ describe('host review ownership', () => {
     });
     expect(next.id).not.toBe(review.id);
     expect(next.threads).toEqual([]);
-    expect(store.get(review.id).threads[0]?.messages[0]?.body).toBe('Old PR feedback');
+    expect(restarted.get(review.id).threads[0]?.messages[0]?.body).toBe('Old PR feedback');
+  });
+  it('recovers the known PR after a local view and a non-ancestral rebase', async () => {
+    const path = join(root, 'store');
+    const store = new ReviewStore(path, 'owner');
+    git('checkout', '-qb', 'work');
+    writeFileSync(join(root, 'file'), 'original feature\n');
+    git('commit', '-qam', 'original feature');
+    const head = git('rev-parse', 'HEAD');
+    const pullRequest = { number: 1, url: 'https://github.com/o/r/pull/1', head, base: 'trunk' };
+    const original = await store.resolve(root, {
+      repository: 'repo',
+      branch: 'work',
+      head,
+      pullRequest,
+    });
+    const forms = { unfinished: { body: 'Keep this PR draft', context: { head } } };
+    store.patch(original.id, [{ kind: 'form', id: 'unfinished', value: forms.unfinished }]);
+    const local = await store.resolve(root, { repository: 'repo', branch: 'work', head });
+    expect(local.id).toBe(original.id);
+    expect(local.subject.pullRequest).toBeUndefined();
+    git('checkout', '-q', 'trunk');
+    writeFileSync(join(root, 'new-base'), 'new base\n');
+    git('add', 'new-base');
+    git('commit', '-qm', 'advance base');
+    git('checkout', '-B', 'work');
+    writeFileSync(join(root, 'file'), 'rebased feature\n');
+    git('commit', '-qam', 'rebased feature');
+    const rebasedHead = git('rev-parse', 'HEAD');
+    const restored = await new ReviewStore(path, 'owner').resolve(root, {
+      repository: 'repo',
+      branch: 'work',
+      head: rebasedHead,
+      pullRequest: { ...pullRequest, head: rebasedHead },
+    });
+    expect(restored.id).toBe(original.id);
+    expect(restored.anchor).toBe(head);
+    expect(restored.forms).toEqual(forms);
   });
   it('preserves unassigned imports with stable counts and requires explicit assignment', async () => {
     const store = new ReviewStore(join(root, 'store'), 'owner');
