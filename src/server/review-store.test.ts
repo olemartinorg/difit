@@ -180,6 +180,84 @@ describe('host review ownership', () => {
     expect(reused.id).not.toBe(original.id);
     expect(() => new ReviewStore(join(root, 'store'), 'replacement-owner')).toThrow('owner');
   });
+  it('keeps a PR review and its original comment context through a non-ancestral rebase', async () => {
+    const store = new ReviewStore(join(root, 'store'), 'owner');
+    git('checkout', '-qb', 'work');
+    writeFileSync(join(root, 'file'), 'original feature\n');
+    git('commit', '-qam', 'original feature');
+    const head = git('rev-parse', 'HEAD');
+    const pullRequest = { number: 1, url: 'https://github.com/o/r/pull/1', head, base: 'trunk' };
+    const review = await store.resolve(root, {
+      repository: 'repo',
+      branch: 'work',
+      head,
+      pullRequest,
+    });
+    store.patch(review.id, [
+      { kind: 'thread', id: 'original', value: thread('original', 'Keep the original context') },
+      {
+        kind: 'form',
+        id: 'unfinished',
+        value: { body: 'Unfinished before rebase', context: { head } },
+      },
+    ]);
+    const original = store.get(review.id);
+    git('checkout', '-q', 'trunk');
+    writeFileSync(join(root, 'new-base'), 'new base\n');
+    git('add', 'new-base');
+    git('commit', '-qm', 'advance base');
+    git('checkout', '-B', 'work');
+    writeFileSync(join(root, 'file'), 'rebased feature\n');
+    git('commit', '-qam', 'rebased feature');
+    const rebasedHead = git('rev-parse', 'HEAD');
+    const reopened = await store.resolve(root, {
+      repository: 'repo',
+      branch: 'renamed-work',
+      head: rebasedHead,
+      pullRequest: { ...pullRequest, head: rebasedHead },
+    });
+    expect(reopened.id).toBe(review.id);
+    expect(reopened.anchor).toBe(head);
+    expect(reopened.subject.head).toBe(rebasedHead);
+    expect(reopened.threads).toEqual(original.threads);
+    expect(reopened.forms).toEqual(original.forms);
+  });
+  it('does not attach a new PR to a reused branch after the old PR was fast-forward merged', async () => {
+    const store = new ReviewStore(join(root, 'store'), 'owner');
+    git('checkout', '-qb', 'work');
+    writeFileSync(join(root, 'file'), 'first feature\n');
+    git('commit', '-qam', 'first feature');
+    const head = git('rev-parse', 'HEAD');
+    const review = await store.resolve(root, {
+      repository: 'repo',
+      branch: 'work',
+      head,
+      pullRequest: { number: 1, url: 'https://github.com/o/r/pull/1', head, base: 'trunk' },
+    });
+    store.patch(review.id, [
+      { kind: 'thread', id: 'old', value: thread('old', 'Old PR feedback') },
+    ]);
+    git('checkout', '-q', 'trunk');
+    git('merge', '--ff-only', 'work');
+    git('checkout', '-q', 'work');
+    writeFileSync(join(root, 'file'), 'second feature\n');
+    git('commit', '-qam', 'second feature');
+    const nextHead = git('rev-parse', 'HEAD');
+    const next = await store.resolve(root, {
+      repository: 'repo',
+      branch: 'work',
+      head: nextHead,
+      pullRequest: {
+        number: 2,
+        url: 'https://github.com/o/r/pull/2',
+        head: nextHead,
+        base: 'trunk',
+      },
+    });
+    expect(next.id).not.toBe(review.id);
+    expect(next.threads).toEqual([]);
+    expect(store.get(review.id).threads[0]?.messages[0]?.body).toBe('Old PR feedback');
+  });
   it('preserves unassigned imports with stable counts and requires explicit assignment', async () => {
     const store = new ReviewStore(join(root, 'store'), 'owner');
     const legacy = [thread('legacy', 'preserve')];
