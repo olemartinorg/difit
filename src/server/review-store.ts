@@ -21,6 +21,8 @@ import type {
 
 export interface ReviewRecord {
   id: string;
+  /** Logical PR binding survives local views that replace the current subject. */
+  pullRequestUrl?: string;
   subject: ReviewSubject;
   anchor: string;
   version: number;
@@ -85,7 +87,7 @@ export class ReviewStore {
     const head = (await git.revparse([`${subject.head}^{commit}`])).trim();
     const pullRequest = subject.pullRequest?.url;
     const authoritative = pullRequest
-      ? this.state.reviews.find((review) => review.subject.pullRequest?.url === pullRequest)
+      ? this.state.reviews.find((review) => review.pullRequestUrl === pullRequest)
       : undefined;
     const candidates = authoritative ? [authoritative] : this.state.reviews;
     for (const review of candidates) {
@@ -93,7 +95,7 @@ export class ReviewStore {
       // cannot bridge two known PR identities, even when their commits descend.
       if (review !== authoritative) {
         if (review.subject.branch !== subject.branch) continue;
-        if (pullRequest && review.subject.pullRequest?.url) continue;
+        if (pullRequest && review.pullRequestUrl) continue;
         const common = await git.raw(['merge-base', review.anchor, head]).then(
           (value) => value.trim(),
           () => '',
@@ -104,12 +106,14 @@ export class ReviewStore {
       this.write((state) => {
         const current = state.reviews.find((value) => value.id === review.id);
         if (!current) throw new Error('Unknown review');
+        if (pullRequest) current.pullRequestUrl = pullRequest;
         current.subject = { ...subject, head };
       });
       return this.get(review.id);
     }
     const review: ReviewRecord = {
       id: randomUUID(),
+      ...(pullRequest ? { pullRequestUrl: pullRequest } : {}),
       subject: { ...subject, head },
       anchor: head,
       version: 0,
