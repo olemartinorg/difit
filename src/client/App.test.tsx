@@ -746,6 +746,101 @@ describe('App Component - Comment sync', () => {
     await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([...mockComments, remote]));
   });
 
+  it('never turns an unadopted delayed refresh into deletion of another client thread', async () => {
+    const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
+    const remote = createMockThread({
+      id: 'remote',
+      filePath: 'test.ts',
+      line: 20,
+      body: 'Other client',
+    });
+    mockComments = [root];
+    const { rerender } = renderApp();
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
+    await act(async () => {});
+    mockReplaceThreads.mockClear();
+    const originalFetch = vi.mocked(global.fetch).getMockImplementation();
+    if (!originalFetch) throw new Error('Fetch fixture was not installed');
+    let finishRead: ((value: Response) => void) | undefined;
+    let finishSave: ((value: Response) => void) | undefined;
+    const writes: Array<{
+      operations: Array<{ kind: string; id: string; value: unknown }>;
+      baseVersion?: number;
+    }> = [];
+    let reads = 0;
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/comments-json')) {
+        reads++;
+        if (reads === 1)
+          return new Promise<Response>((resolve) => {
+            finishRead = resolve;
+          });
+        return Promise.resolve(
+          new Response(JSON.stringify({ version: 5, threads: [...mockComments, remote] })),
+        );
+      }
+      if (String(input).startsWith('/api/comments?') && init?.method === 'POST') {
+        writes.push(JSON.parse(String(init.body)));
+        if (writes.length === 1)
+          return new Promise<Response>((resolve) => {
+            finishSave = resolve;
+          });
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ version: 4, merged: true, threads: [...mockComments, remote] }),
+          ),
+        );
+      }
+      return originalFetch(input, init);
+    });
+    let refreshing: Promise<void> | undefined;
+    act(() => {
+      refreshing = mockCommentsChanged?.();
+    });
+    const edit = (body: string) => {
+      mockComments = [
+        { ...root, messages: root.messages.map((message) => ({ ...message, body })) },
+      ];
+      rerender(
+        <HotkeysProvider initiallyActiveScopes={['navigation']}>
+          <App />
+        </HotkeysProvider>,
+      );
+    };
+    edit('First local edit');
+    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+    await act(async () => {
+      finishRead?.(new Response(JSON.stringify({ version: 2, threads: [root, remote] })));
+      await refreshing;
+    });
+    expect(mockReplaceThreads).not.toHaveBeenCalledWith([root, remote]);
+    edit('Second local edit');
+    await waitFor(() =>
+      expect(
+        Object.keys(localStorage).filter((key) => key.startsWith('difit-pending-comments/')),
+      ).toHaveLength(2),
+    );
+    await act(async () => {
+      finishSave?.(
+        new Response(JSON.stringify({ version: 3, merged: true, threads: [root, remote] })),
+      );
+    });
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes.flatMap((write) => write.operations)).not.toContainEqual({
+      kind: 'thread',
+      id: 'remote',
+      value: null,
+    });
+    expect(writes[1]?.operations).toEqual([
+      expect.objectContaining({
+        kind: 'message',
+        id: 'root',
+        value: expect.objectContaining({ body: 'Second local edit' }),
+      }),
+    ]);
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([...mockComments, remote]));
+  });
+
   it('recovers pending affected-field saves before loading current comments', async () => {
     mockComments = [];
     const pending = {
