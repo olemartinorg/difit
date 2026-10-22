@@ -1,5 +1,29 @@
 import '@testing-library/jest-dom';
-import { vi } from 'vitest';
+import { afterAll, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+// Git hooks export the parent repository. Disposable Git fixtures must own
+// their repository and index instead of inheriting the committing checkout.
+for (const key of [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_COMMON_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_PREFIX',
+  'GIT_IMPLICIT_WORK_TREE',
+])
+  delete process.env[key];
+
+const privateReviews = mkdtempSync(join(tmpdir(), 'difit-test-reviews-'));
+beforeEach(() => {
+  process.env.DIFIT_REVIEW_STORE = join(privateReviews, randomUUID());
+});
+afterAll(() => rmSync(privateReviews, { recursive: true, force: true }));
 import { Agent, setGlobalDispatcher } from 'undici';
 
 // Disable keep-alive for tests to prevent ECONNRESET errors
