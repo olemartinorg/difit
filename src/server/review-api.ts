@@ -3,7 +3,7 @@ import type { Express } from 'express';
 import type { DiffSelection } from '../types/diff.js';
 import { getEmptyReviewSelection } from '../utils/reviewSelection.js';
 import type { ReviewDiffParser } from './review-diff.js';
-import type { ReviewSubject } from './review-store.js';
+import type { ReviewSubject } from '../types/reviewSubmission.js';
 import { ReviewInventoryService } from './review-inventory.js';
 import { readUserConfig, updateUserClientSettings } from './user-config.js';
 

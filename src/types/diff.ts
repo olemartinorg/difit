@@ -49,7 +49,7 @@ export interface DiffSelection {
 
 export interface DiffResponse {
   reviewId?: string;
-  reviewSubject?: import('../server/review-store.js').ReviewSubject;
+  reviewSubject?: import('./reviewSubmission.js').ReviewSubject;
   commit: string;
   files: DiffFile[];
   ignoreWhitespace?: boolean;

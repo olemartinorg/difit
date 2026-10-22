@@ -11,7 +11,7 @@ import type { ReviewInventory } from '../types/review.js';
 import { getDefaultReviewRange, resolveReviewRange } from '../utils/reviewSelection.js';
 import { ReviewApi } from './review-api.js';
 import { ReviewDiffParser } from './review-diff.js';
-import type { ReviewSubject } from './review-store.js';
+import type { ReviewSubject } from '../types/reviewSubmission.js';
 import { readUserConfig, updateUserClientSettings } from './user-config.js';
 
 describe('scoped review target API', () => {

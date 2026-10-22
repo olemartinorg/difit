@@ -12,19 +12,13 @@ import {
 import { dirname, join } from 'node:path';
 import { simpleGit } from 'simple-git';
 import type { DiffCommentThread } from '../types/diff.js';
-import type { ReviewSubmission } from '../types/reviewSubmission.js';
+import type {
+  ReviewSubmission,
+  ReviewSubject,
+  ReviewDeliveryReceipt,
+  SubmittedReview,
+} from '../types/reviewSubmission.js';
 
-export interface ReviewSubject {
-  repository: string;
-  branch: string;
-  head: string;
-  base?: string;
-  baseHead?: string;
-  comparisonHead?: string;
-  pullRequest?: { number: number; url: string; head: string; base: string; baseHead?: string };
-  unpublished?: boolean;
-  working?: boolean;
-}
 export interface ReviewRecord {
   id: string;
   subject: ReviewSubject;
@@ -41,14 +35,7 @@ interface ReviewFile {
   reviews: ReviewRecord[];
   unassigned: Record<string, DiffCommentThread[]>;
   assignedImports: Record<string, string>;
-  receipts: Record<
-    string,
-    {
-      outcome: 'submitted' | 'accepted' | 'failed' | 'unknown';
-      conversationId?: string;
-      error?: string;
-    }
-  >;
+  receipts: Record<string, ReviewDeliveryReceipt>;
 }
 
 /** One repository process owns writes. Every accepted write reaches disk before publication. */
@@ -248,14 +235,15 @@ export class ReviewStore {
       state.receipts[id] = receipt;
     });
   }
-  submitted(id?: string) {
+  submitted(id?: string): SubmittedReview[] {
     return this.state.reviews.flatMap((review) =>
       review.submissions
         .filter((submission) => !id || submission.id === id)
-        .map((submission) => ({
-          ...structuredClone(submission),
-          receipt: this.state.receipts[submission.id],
-        })),
+        .map((submission) => {
+          const receipt = this.state.receipts[submission.id];
+          if (!receipt) throw new Error('Submitted review has no delivery receipt');
+          return { ...structuredClone(submission), receipt: structuredClone(receipt) };
+        }),
     );
   }
 }

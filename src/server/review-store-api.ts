@@ -3,8 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Express, Request } from 'express';
 import { simpleGit } from 'simple-git';
 import type { DiffCommentThread, DiffSelection } from '../types/diff.js';
-import type { ReviewSubmission } from '../types/reviewSubmission.js';
-import type { ReviewStore, ReviewSubject } from './review-store.js';
+import type { ReviewSubmission, ReviewSubject } from '../types/reviewSubmission.js';
+import type { ReviewStore } from './review-store.js';
 
 export function registerReviewStore(
   app: Express,

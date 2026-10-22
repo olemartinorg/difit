@@ -1,8 +1,9 @@
 import { createConnection } from 'node:net';
+import { ReviewStore } from '../server/review-store.js';
 import { ReviewInventoryService } from '../server/review-inventory.js';
 import { Command, Option } from 'commander';
 
-import type { ReviewSubmission } from '../types/reviewSubmission.js';
+import type { ReviewSubmission, SubmittedReviewSummary } from '../types/reviewSubmission.js';
 
 export function createReviewCommand(): Command {
   const review = new Command('review').description('Receive an explicitly submitted review');
@@ -30,13 +31,49 @@ export function createReviewCommand(): Command {
         }
       });
     });
+  const query = async (
+    options: { repository?: string; store?: string; owner?: string },
+    id?: string,
+  ) => {
+    if (options.store || options.owner) {
+      if (!options.store || !options.owner || options.repository)
+        throw new Error('Offline queries require --store and --owner, without --repository');
+      const records = new ReviewStore(options.store, options.owner).submitted(id);
+      if (id) {
+        const record = records[0];
+        if (!record) throw new Error('Unknown submitted review');
+        return record;
+      }
+      return records.map(
+        ({
+          id,
+          reviewId,
+          submittedAt,
+          repositoryId,
+          subject,
+          receipt,
+        }): SubmittedReviewSummary => ({
+          id,
+          reviewId,
+          submittedAt,
+          repositoryId,
+          subject,
+          receipt,
+        }),
+      );
+    }
+    if (!options.repository) throw new Error('Task queries require --repository');
+    return querySubmitted(options.repository, id);
+  };
   review
     .command('list')
     .description('List submitted feedback for this task repository, without opening a view')
-    .requiredOption('--repository <name>', 'task repository name')
-    .action(async (options: { repository: string }) => {
+    .option('--repository <name>', 'task repository name for the mounted bridge')
+    .option('--store <directory>', 'read an owned native review store without a server')
+    .option('--owner <identity>', 'required exact owner for an offline store')
+    .action(async (options: { repository?: string; store?: string; owner?: string }) => {
       try {
-        console.log(JSON.stringify(await querySubmitted(options.repository)));
+        console.log(JSON.stringify(await query(options)));
       } catch (error) {
         console.error(String(error));
         process.exitCode = 1;
@@ -46,15 +83,19 @@ export function createReviewCommand(): Command {
     .command('get')
     .description('Retrieve an immutable submitted review and its delivery receipt')
     .argument('<id>', 'submission ID')
-    .requiredOption('--repository <name>', 'task repository name')
-    .action(async (id: string, options: { repository: string }) => {
-      try {
-        console.log(JSON.stringify(await querySubmitted(options.repository, id)));
-      } catch (error) {
-        console.error(String(error));
-        process.exitCode = 1;
-      }
-    });
+    .option('--repository <name>', 'task repository name for the mounted bridge')
+    .option('--store <directory>', 'read an owned native review store without a server')
+    .option('--owner <identity>', 'required exact owner for an offline store')
+    .action(
+      async (id: string, options: { repository?: string; store?: string; owner?: string }) => {
+        try {
+          console.log(JSON.stringify(await query(options, id)));
+        } catch (error) {
+          console.error(String(error));
+          process.exitCode = 1;
+        }
+      },
+    );
   review
     .command('inventory')
     .description('Inspect a branch without checkout')

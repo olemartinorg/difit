@@ -9,7 +9,7 @@ import { expect, it, vi } from 'vitest';
 import type { DiffResponse } from '../types/diff.js';
 import { getDefaultReviewRange, resolveReviewRange } from '../utils/reviewSelection.js';
 import type { ReviewInventory } from '../types/review.js';
-import type { ReviewSubject } from './review-store.js';
+import type { ReviewSubject } from '../types/reviewSubmission.js';
 import { startServer } from './server.js';
 
 it('publishes the actual comparison snapshot and files after a scoped review target changes', async () => {
