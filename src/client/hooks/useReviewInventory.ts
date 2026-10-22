@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { DiffSelection } from '../../types/diff';
@@ -58,7 +59,7 @@ export function useReviewInventory(
       const urlTarget = targetRef.current;
       const params = new URLSearchParams({ ignoreWhitespace: String(ignoreWhitespace) });
       if (urlTarget) params.set('target', urlTarget);
-      const response = await fetch(`/api/review?${params}`);
+      const response = await reviewFetch(`/api/review?${params}`);
       const data = (await response.json()) as ReviewInventory & { error?: string };
       if (requestId !== requestIdRef.current) return activeRef.current;
       if (!response.ok) throw new Error(data.error || 'Could not load changes');
@@ -161,7 +162,7 @@ export function useReviewInventory(
     async (target: string) => {
       setBusy(true);
       try {
-        const response = await fetch('/api/review/target', {
+        const response = await reviewFetch('/api/review/target', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ target }),

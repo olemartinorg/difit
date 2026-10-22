@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import {
   createContext,
   useCallback,
@@ -38,7 +39,9 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
     let live = true;
     const refresh = async () => {
       try {
-        const response = await fetch(`/api/review-state?reviewId=${encodeURIComponent(reviewId)}`);
+        const response = await reviewFetch(
+          `/api/review-state?reviewId=${encodeURIComponent(reviewId)}`,
+        );
         if (!response.ok) throw new Error('Could not load saved review drafts');
         const data = (await response.json()) as { version: number; forms: Record<string, Form> };
         if (live && !pending.current && !failed.current && data.version >= version.current) {
@@ -50,7 +53,7 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
       }
     };
     void refresh();
-    void fetch('/api/reviews/unassigned')
+    void reviewFetch('/api/reviews/unassigned')
       .then((response) => response.json())
       .then((value) => {
         if (live) setHistory(value as typeof history);
@@ -84,11 +87,14 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
         .catch(() => {})
         .then(async () => {
           try {
-            const response = await fetch(`/api/comments?reviewId=${encodeURIComponent(reviewId)}`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ writeId, operations: [{ kind: 'form', id, value }] }),
-            });
+            const response = await reviewFetch(
+              `/api/comments?reviewId=${encodeURIComponent(reviewId)}`,
+              {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ writeId, operations: [{ kind: 'form', id, value }] }),
+              },
+            );
             if (!response.ok)
               throw new Error(
                 'Draft save failed. Your text is kept on this device; retry by editing it.',
@@ -137,7 +143,7 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
               <button
                 className="ml-2 rounded border border-github-border px-2 py-1"
                 onClick={() => {
-                  void fetch(
+                  void reviewFetch(
                     `/api/reviews/unassigned/${id}/assign?reviewId=${encodeURIComponent(reviewId ?? '')}`,
                     { method: 'POST' },
                   )

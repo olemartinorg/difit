@@ -1,12 +1,9 @@
-import { installReviewContext } from './services/reviewContext';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 
 import App from './App';
 import './styles/global.css';
-
-installReviewContext();
 
 const rootElement = document.getElementById('root');
 

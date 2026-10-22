@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import { reviewIntroduction } from '../../utils/reviewIntroduction';
 import { useCallback, useRef, useState } from 'react';
 
@@ -89,7 +90,7 @@ export function useReviewExport(options: ReviewExportOptions) {
           text,
           hostContext: capturedHostContext,
         };
-        const response = await fetch('/api/review-handoff', {
+        const response = await reviewFetch('/api/review-handoff', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(snapshot),

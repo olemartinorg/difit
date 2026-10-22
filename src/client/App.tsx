@@ -1,3 +1,4 @@
+import { commentURL, reviewFetch } from './services/reviewContext';
 import { commentOperations } from './services/commentOperations';
 import { ReviewDrafts } from './components/ReviewDrafts';
 import { Columns, AlignLeft } from 'lucide-react';
@@ -234,30 +235,9 @@ function App() {
   }, [diffData?.reviewId, resolvedSelectionKey]);
   const currentReviewRef = useRef({ key: resolvedSelectionKey, commit: diffData?.commit });
   currentReviewRef.current = { key: resolvedSelectionKey, commit: diffData?.commit };
-  const commentSessionQueryString = useMemo(() => {
-    if (!resolvedSelection) {
-      return null;
-    }
-
-    const params = new URLSearchParams({
-      ...(diffData?.reviewId ? { reviewId: diffData.reviewId } : {}),
-      base: resolvedSelection.baseCommitish,
-      target: resolvedSelection.targetCommitish,
-    });
-    if (resolvedSelection.baseMode === 'merge-base') {
-      params.set('baseMode', resolvedSelection.baseMode);
-    }
-
-    return params.toString();
-  }, [resolvedSelection, diffData?.reviewId]);
   const getCommentApiUrl = useCallback(
-    (path: string) => {
-      if (!commentSessionQueryString) {
-        return path;
-      }
-      return `${path}?${commentSessionQueryString}`;
-    },
-    [commentSessionQueryString],
+    (path: string) => commentURL(path, diffData?.reviewId, resolvedSelection),
+    [diffData?.reviewId, resolvedSelection],
   );
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
@@ -902,7 +882,7 @@ function App() {
         if (requestedSelection?.baseMode === 'merge-base')
           params.set('baseMode', requestedSelection.baseMode);
 
-        const response = await fetch(`/api/diff?${params}`, {
+        const response = await reviewFetch(`/api/diff?${params}`, {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error('Failed to fetch diff data');
@@ -1163,7 +1143,7 @@ function App() {
           const { loadReviewComments } = await import('./services/reviewComments');
           const historical = loadReviewComments(diffData.repositoryId);
           if (historical.threads.length) {
-            const imported = await fetch('/api/reviews/unassigned', {
+            const imported = await reviewFetch('/api/reviews/unassigned', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ threads: historical.threads }),
