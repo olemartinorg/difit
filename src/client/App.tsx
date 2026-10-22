@@ -285,33 +285,36 @@ function App() {
     }
   }, [bootstrappedCommentsKey, commentsContextKey]);
 
-  const fetchServerThreads = useCallback(async (): Promise<DiffCommentThread[]> => {
-    const capturedContext = commentsContextKey;
+  const fetchServerThreads = useCallback(async () => {
     const response = await fetch(getCommentApiUrl('/api/comments-json'));
     if (!response.ok) {
       throw new Error(`Failed to fetch comments: ${response.status} ${response.statusText}`);
     }
-
     const payload = (await response.json()) as {
       version?: number;
       threads?: DiffCommentThread[];
     };
-    if (commentsContextRef.current !== capturedContext) return [];
-    if (typeof payload.version === 'number') {
-      serverCommentVersionRef.current = Math.max(
-        serverCommentVersionRef.current ?? 0,
-        payload.version,
-      );
-    }
-    if (
-      typeof payload.version === 'number' &&
-      payload.version < (serverCommentVersionRef.current ?? 0)
-    )
-      return latestThreadsRef.current;
-    const loaded = Array.isArray(payload.threads) ? payload.threads : [];
-    syncedThreadsRef.current = loaded;
-    return loaded;
-  }, [commentsContextKey, getCommentApiUrl]);
+    return {
+      version: payload.version,
+      threads: Array.isArray(payload.threads) ? payload.threads : [],
+    };
+  }, [getCommentApiUrl]);
+
+  const adoptServerThreads = useCallback(
+    (snapshot: { version?: number; threads: DiffCommentThread[] }) => {
+      if (
+        typeof snapshot.version === 'number' &&
+        snapshot.version < (serverCommentVersionRef.current ?? 0)
+      )
+        return false;
+      if (typeof snapshot.version === 'number') serverCommentVersionRef.current = snapshot.version;
+      syncedThreadsRef.current = snapshot.threads;
+      skipNextCommentSyncRef.current = true;
+      replaceThreads(snapshot.threads);
+      return true;
+    },
+    [replaceThreads],
+  );
 
   const handleCommentsChanged = useCallback(
     async function refreshComments() {
@@ -324,7 +327,7 @@ function App() {
       const generation = reviewReset.generationRef.current;
       const capturedContext = commentsContextKey;
       try {
-        const serverThreads = await fetchServerThreads();
+        const snapshot = await fetchServerThreads();
         if (commentsContextRef.current !== capturedContext) return;
         if (generation !== reviewReset.generationRef.current) return;
         // A local edit made while this read was pending has its own sync request.
@@ -334,8 +337,7 @@ function App() {
           if (pendingCommentSyncRef.current === 0) void refreshComments();
           return;
         }
-        skipNextCommentSyncRef.current = true;
-        replaceThreads(serverThreads);
+        if (!adoptServerThreads(snapshot)) return;
         if (commentsContextKey) {
           setBootstrappedCommentsKey(commentsContextKey);
         }
@@ -343,7 +345,7 @@ function App() {
         console.error('Failed to refresh comments from server:', commentsError);
       }
     },
-    [commentsContextKey, fetchServerThreads, replaceThreads, reviewReset.generationRef],
+    [commentsContextKey, fetchServerThreads, adoptServerThreads, reviewReset.generationRef],
   );
 
   const syncThreadsToServer = useCallback(
@@ -1193,8 +1195,7 @@ function App() {
             );
           localStorage.removeItem(key);
         }
-        const serverThreads = await fetchServerThreads();
-        const nextThreads = serverThreads;
+        const snapshot = await fetchServerThreads();
         if (
           cancelled ||
           commentsContextRef.current !== commentsContextKey ||
@@ -1203,14 +1204,9 @@ function App() {
           return;
         }
 
-        skipNextCommentSyncRef.current = true;
-        replaceThreads(nextThreads);
+        if (!adoptServerThreads(snapshot)) return;
         setBootstrappedCommentsKey(commentsContextKey);
         setCommentSaveError(null);
-
-        if (JSON.stringify(serverThreads) !== JSON.stringify(nextThreads)) {
-          await syncThreadsToServer(nextThreads);
-        }
       } catch (commentsError) {
         if (!cancelled) {
           console.error('Failed to bootstrap comments from server:', commentsError);
@@ -1235,6 +1231,7 @@ function App() {
     bootstrappedCommentsKey,
     commentsContextKey,
     fetchServerThreads,
+    adoptServerThreads,
     hasLoadedComments,
     getCommentApiUrl,
     diffData?.repositoryId,
