@@ -35,6 +35,7 @@ interface ErrorWatchEvent {
 
 interface CommentsChangedWatchEvent {
   type: 'commentsChanged';
+  reviewId?: string;
   version: number;
   timestamp: string;
 }

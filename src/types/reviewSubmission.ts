@@ -2,6 +2,8 @@ import type { DiffCommentThread, DiffSelection } from './diff';
 
 export interface ReviewSubmission {
   id: string;
+  reviewId?: string;
+  subject?: import('../server/review-store.js').ReviewSubject;
   submittedAt: string;
   repositoryId: string;
   selection: DiffSelection;

@@ -1,10 +1,12 @@
-import React, { useRef, useState } from 'react';
+import { useReviewDraft } from './ReviewDrafts';
+import React, { useEffect, useRef, useState } from 'react';
 
 import { CommentBodyRenderer, hasSuggestionInBody } from './CommentBodyRenderer';
 import type { AppearanceSettings } from './SettingsModal';
 import { SuggestionTemplateButton } from './SuggestionTemplateButton';
 
 interface CommentFormProps {
+  draftId?: string;
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
   selectedCode?: string;
@@ -20,6 +22,7 @@ interface CommentFormProps {
 type CommentFormMode = 'edit' | 'preview';
 
 export function CommentForm({
+  draftId,
   onSubmit,
   onCancel,
   selectedCode,
@@ -31,7 +34,19 @@ export function CommentForm({
   submitLabel = 'Submit',
   placeholder = 'Leave a comment...',
 }: CommentFormProps) {
-  const [body, setBody] = useState(initialValue);
+  const draft = useReviewDraft(draftId);
+  const [body, setLocalBody] = useState(draft.form?.body ?? initialValue);
+  useEffect(() => {
+    setLocalBody(draft.form?.body ?? initialValue);
+  }, [draft.form, initialValue]);
+  const setBody = (value: string) => {
+    setLocalBody(value);
+    draft.save({ body: value, context: { filename, selectedCode, initialValue } });
+  };
+  const cancel = () => {
+    draft.save(null);
+    onCancel();
+  };
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [mode, setMode] = useState<CommentFormMode>('edit');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -46,7 +61,8 @@ export function CommentForm({
     setIsSubmitting(true);
     try {
       await onSubmit(body.trim());
-      setBody('');
+      draft.save(null);
+      setLocalBody('');
       setMode('edit');
     } catch (error) {
       console.error('Failed to submit comment:', error);
@@ -59,7 +75,7 @@ export function CommentForm({
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       void handleSubmit(e);
     } else if (e.key === 'Escape') {
-      onCancel();
+      cancel();
     }
   };
 
@@ -140,7 +156,7 @@ export function CommentForm({
         <button
           type="button"
           data-comment-cancel="true"
-          onClick={onCancel}
+          onClick={cancel}
           className="text-xs px-3 py-1.5 bg-github-bg-tertiary text-github-text-primary border border-github-border rounded hover:opacity-80 transition-all disabled:opacity-50"
           disabled={isSubmitting}
         >

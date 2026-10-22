@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { useReviewDraft } from './ReviewDrafts';
 import {
   createContext,
   useCallback,
@@ -44,25 +46,34 @@ export function LiveCommentDraftProvider({
   syntaxTheme: DiffViewerBodyProps['syntaxTheme'];
   diffMode: DiffViewerBodyProps['diffMode'];
 }) {
-  const [anchor, setAnchor] = useState<(DraftAnchor & { id: number }) | null>(null);
+  const anchorDraft = useReviewDraft(`anchor:${file.path}`);
+  const [anchor, setLocalAnchor] = useState<(DraftAnchor & { id: string }) | null>(null);
   const [host] = useState(() => {
     const node = document.createElement('div');
     node.dataset.liveCommentEditor = 'true';
     return node;
   });
-  const nextIdRef = useRef(0);
+  const setAnchor = (value: (DraftAnchor & { id: string }) | null) => {
+    setLocalAnchor(value);
+    anchorDraft.save(value ? { body: '', context: value } : null);
+  };
+  useEffect(() => {
+    setLocalAnchor(
+      anchorDraft.form?.context ? (anchorDraft.form.context as DraftAnchor & { id: string }) : null,
+    );
+  }, [anchorDraft.form]);
   const fallbackRef = useRef<HTMLDivElement>(null);
   const draft = useMemo(
     () => (anchor ? resolveDraftAnchor(anchor, chunks) : null),
     [anchor, chunks],
   );
-  const currentRef = useRef({ chunks, draft });
-  currentRef.current = { chunks, draft };
+  const currentRef = useRef({ chunks, draft, setAnchor });
+  currentRef.current = { chunks, draft, setAnchor };
   const setSelection = useCallback<Dispatch<SetStateAction<DraftSelection | null>>>((update) => {
     const current = currentRef.current;
     const next = typeof update === 'function' ? update(current.draft) : update;
-    setAnchor(
-      next ? { ...createDraftAnchor(next, current.chunks), id: ++nextIdRef.current } : null,
+    current.setAnchor(
+      next ? { ...createDraftAnchor(next, current.chunks), id: crypto.randomUUID() } : null,
     );
   }, []);
   const value = useMemo(
@@ -105,6 +116,7 @@ export function LiveCommentDraftProvider({
             )}
             <CommentForm
               key={anchor.id}
+              draftId={`new:${file.path}:${anchor.id}`}
               onSubmit={async (body) => {
                 await onAddComment(draft.lineNumber, body, anchor.code, draft.side);
                 setAnchor(null);

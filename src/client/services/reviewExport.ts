@@ -12,14 +12,6 @@ export async function clearExportedComments(
 ) {
   if (snapshot.baseVersion === null)
     throw new Error('Comments have not finished loading. They have been kept.');
-  // Flush the exported snapshot before resetting. A stale version merges agent or
-  // other-tab edits, which the conditional DELETE below will preserve.
-  const synced = await fetch(snapshot.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threads: snapshot.threads, baseVersion: snapshot.baseVersion }),
-  });
-  if (!synced.ok) throw new Error('Could not save review comments before clearing them.');
   const response = await fetch(snapshot.url, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },

@@ -171,6 +171,7 @@ function ThreadMessageItem({
         </>
       ) : (
         <CommentForm
+          draftId={`edit:${message.id}`}
           onSubmit={handleSaveEdit}
           onCancel={handleCancelEdit}
           selectedCode={originalCode}
@@ -356,6 +357,7 @@ export function CommentThreadCard({
           >
             {isReplying ? (
               <CommentForm
+                draftId={`reply:${thread.id}`}
                 onSubmit={async (body) => {
                   await onReplyToThread(thread.id, body);
                   setIsReplying(false);

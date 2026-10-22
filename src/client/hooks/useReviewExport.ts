@@ -1,3 +1,4 @@
+import { reviewIntroduction } from '../../utils/reviewIntroduction';
 import { useCallback, useRef, useState } from 'react';
 
 import type { DiffCommentThread, DiffResponse, DiffSelection } from '../../types/diff';
@@ -30,7 +31,7 @@ interface ReviewExportOptions {
 
 export function useReviewExport(options: ReviewExportOptions) {
   const { diff, selection, resolvedSelection, threads, settings } = options;
-  const context = diff?.repositoryId ?? '';
+  const context = diff?.reviewId ?? diff?.repositoryId ?? '';
   const handoff = options.handoff ?? diff?.agentHandoff === true;
   const currentRef = useRef({ context, threads });
   currentRef.current = { context, threads };
@@ -61,13 +62,24 @@ export function useReviewExport(options: ReviewExportOptions) {
     const originalThreads = JSON.stringify(threads);
     const isOrigin = () => currentRef.current.context === context;
     try {
-      const text = formatReviewExport(prompt, settings.template);
+      const text =
+        (diff.reviewSubject
+          ? reviewIntroduction(
+              diff.reviewSubject,
+              resolvedSelection.baseCommitish,
+              resolvedSelection.targetCommitish,
+            )
+          : '') + formatReviewExport(prompt, settings.template);
       capturingContext = handoff;
       const hostContext = handoff ? captureReviewHandoffContext() : undefined;
       if (handoff) {
         const capturedHostContext = await hostContext;
         capturingContext = false;
+        const captured = capturedHostContext as { submissionId?: string } | undefined;
         const snapshot = {
+          id: captured?.submissionId,
+          reviewId: diff.reviewId,
+          subject: diff.reviewSubject,
           selection,
           resolvedSelection,
           commit: diff.commit,
@@ -86,6 +98,13 @@ export function useReviewExport(options: ReviewExportOptions) {
           const payload = (await response.json()) as { error?: string };
           throw new Error(payload.error ?? 'Could not pass the review to the agent.');
         }
+        const result = (await response.json()) as {
+          delivery?: { outcome: string; error?: string };
+        };
+        if (result.delivery && result.delivery.outcome !== 'accepted')
+          throw new Error(
+            `Review submitted; delivery ${result.delivery.outcome}. ${result.delivery.error ?? 'Feedback is retained in submitted history.'}`,
+          );
       } else {
         await copyTextToClipboard(text);
       }
@@ -99,7 +118,9 @@ export function useReviewExport(options: ReviewExportOptions) {
         await clearExportedComments(
           {
             url: options.commentsUrl,
-            repositoryId: diff.repositoryId,
+            repositoryId: diff.reviewId
+              ? `${diff.repositoryId}/${diff.reviewId}`
+              : diff.repositoryId,
             threads,
             baseVersion: options.commentVersion,
           },

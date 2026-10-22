@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 
-import type { Express, Response } from 'express';
+import type { Express, Response, Request } from 'express';
 
 import type { DiffCommentThread, DiffSelection } from '../types/diff.js';
 import type { ReviewSubmission } from '../types/reviewSubmission.js';
@@ -27,10 +27,12 @@ export function registerReviewHandoff(
     enabled: boolean;
     repositoryId: string;
     parseThreads: (body: unknown) => DiffCommentThread[];
+    capture?: (request: Request, body: ReviewSubmission) => Promise<ReviewSubmission>;
   },
 ) {
   let pending: { snapshot: ReviewSubmission; response: Response; claimed: boolean } | null = null;
   let receiver: Response | null = null;
+  let capturing = false;
 
   const deliver = () => {
     if (!pending || pending.claimed || !receiver) return;
@@ -61,15 +63,16 @@ export function registerReviewHandoff(
     deliver();
   });
 
-  app.post('/api/review-handoff', (req, res) => {
+  app.post('/api/review-handoff', async (req, res) => {
     if (!options.enabled) {
       res.status(409).json({ error: 'Agent handoff is not enabled.' });
       return;
     }
-    if (pending) {
+    if (pending || capturing) {
       res.status(409).json({ error: 'A review is already waiting for an agent.' });
       return;
     }
+    capturing = true;
     try {
       const body = req.body as Partial<ReviewSubmission>;
       if (
@@ -79,10 +82,12 @@ export function registerReviewHandoff(
         !Array.isArray(body.threads)
       )
         throw new Error('Invalid review');
-      const snapshot: ReviewSubmission = {
-        id: randomUUID(),
+      let snapshot: ReviewSubmission = {
+        id: typeof body.id === 'string' ? body.id : randomUUID(),
         submittedAt: new Date().toISOString(),
         repositoryId: options.repositoryId,
+        ...(typeof body.reviewId === 'string' ? { reviewId: body.reviewId } : {}),
+        ...(body.subject ? { subject: body.subject } : {}),
         selection: parseSelection(body.selection),
         resolvedSelection: parseSelection(body.resolvedSelection),
         commit: body.commit,
@@ -92,6 +97,7 @@ export function registerReviewHandoff(
         text: body.text,
         ...(body.hostContext === undefined ? {} : { hostContext: body.hostContext }),
       };
+      if (options.capture) snapshot = await options.capture(req, snapshot);
       pending = { snapshot, response: res, claimed: false };
       // Keep the browser request open until the receiver has written the review to stdout.
       const timeout = setTimeout(() => {
@@ -107,6 +113,8 @@ export function registerReviewHandoff(
       deliver();
     } catch {
       res.status(400).json({ error: 'Invalid review submission' });
+    } finally {
+      capturing = false;
     }
   });
 
@@ -117,7 +125,7 @@ export function registerReviewHandoff(
     }
     const submission = pending;
     pending = null;
-    submission.response.json({ delivered: true, id: submission.snapshot.id });
+    submission.response.json({ receivedByReceiver: true, id: submission.snapshot.id });
     res.json({ success: true });
   });
 }

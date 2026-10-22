@@ -1,3 +1,5 @@
+import { commentOperations } from './services/commentOperations';
+import { ReviewDrafts } from './components/ReviewDrafts';
 import { Columns, AlignLeft } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
@@ -13,7 +15,6 @@ import {
 } from '../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
 import { getEmptyReviewSelection } from '../utils/reviewSelection';
-import { mergeCommentThreads } from '../utils/commentImports';
 import {
   createDiffSelection,
   diffSelectionsEqual,
@@ -215,7 +216,7 @@ function App() {
     resolvedSelection?.targetCommitish,
     diffData?.commit, // Using commit as currentCommitHash
     undefined, // branchToHash map - could be populated from server data
-    diffData?.repositoryId, // Repository identifier for storage isolation
+    diffData?.reviewId ? `${diffData.repositoryId}/${diffData.reviewId}` : undefined, // Review-scoped browser cache
     resolvedSelection?.baseMode,
   );
 
@@ -229,8 +230,8 @@ function App() {
       return null;
     }
 
-    return diffData?.repositoryId ?? 'default';
-  }, [diffData?.repositoryId, resolvedSelectionKey]);
+    return diffData?.reviewId ?? null;
+  }, [diffData?.reviewId, resolvedSelectionKey]);
   const currentReviewRef = useRef({ key: resolvedSelectionKey, commit: diffData?.commit });
   currentReviewRef.current = { key: resolvedSelectionKey, commit: diffData?.commit };
   const commentSessionQueryString = useMemo(() => {
@@ -239,6 +240,7 @@ function App() {
     }
 
     const params = new URLSearchParams({
+      ...(diffData?.reviewId ? { reviewId: diffData.reviewId } : {}),
       base: resolvedSelection.baseCommitish,
       target: resolvedSelection.targetCommitish,
     });
@@ -247,7 +249,7 @@ function App() {
     }
 
     return params.toString();
-  }, [resolvedSelection]);
+  }, [resolvedSelection, diffData?.reviewId]);
   const getCommentApiUrl = useCallback(
     (path: string) => {
       if (!commentSessionQueryString) {
@@ -264,7 +266,18 @@ function App() {
   const skipNextCommentSyncRef = useRef(false);
   // Last server comment version seen; echoed back as baseVersion so the server can detect concurrent writes.
   const serverCommentVersionRef = useRef<number | null>(null);
+  const syncedThreadsRef = useRef<DiffCommentThread[]>([]);
+  const saveQueueRef = useRef(Promise.resolve());
+  const commentsContextRef = useRef(commentsContextKey);
+  commentsContextRef.current = commentsContextKey;
+  const [commentSaveError, setCommentSaveError] = useState<string | null>(null);
   const pendingBootstrapAfterLocalResetRef = useRef(false);
+
+  useEffect(() => {
+    serverCommentVersionRef.current = null;
+    syncedThreadsRef.current = [];
+    setCommentSaveError(null);
+  }, [commentsContextKey]);
 
   useEffect(() => {
     if (commentsContextKey !== bootstrappedCommentsKey) {
@@ -273,6 +286,7 @@ function App() {
   }, [bootstrappedCommentsKey, commentsContextKey]);
 
   const fetchServerThreads = useCallback(async (): Promise<DiffCommentThread[]> => {
+    const capturedContext = commentsContextKey;
     const response = await fetch(getCommentApiUrl('/api/comments-json'));
     if (!response.ok) {
       throw new Error(`Failed to fetch comments: ${response.status} ${response.statusText}`);
@@ -282,14 +296,22 @@ function App() {
       version?: number;
       threads?: DiffCommentThread[];
     };
+    if (commentsContextRef.current !== capturedContext) return [];
     if (typeof payload.version === 'number') {
       serverCommentVersionRef.current = Math.max(
         serverCommentVersionRef.current ?? 0,
         payload.version,
       );
     }
-    return Array.isArray(payload.threads) ? payload.threads : [];
-  }, [getCommentApiUrl]);
+    if (
+      typeof payload.version === 'number' &&
+      payload.version < (serverCommentVersionRef.current ?? 0)
+    )
+      return latestThreadsRef.current;
+    const loaded = Array.isArray(payload.threads) ? payload.threads : [];
+    syncedThreadsRef.current = loaded;
+    return loaded;
+  }, [commentsContextKey, getCommentApiUrl]);
 
   const handleCommentsChanged = useCallback(
     async function refreshComments() {
@@ -300,8 +322,10 @@ function App() {
       pendingCommentRefreshRef.current = false;
       const originalThreads = latestThreadsRef.current;
       const generation = reviewReset.generationRef.current;
+      const capturedContext = commentsContextKey;
       try {
         const serverThreads = await fetchServerThreads();
+        if (commentsContextRef.current !== capturedContext) return;
         if (generation !== reviewReset.generationRef.current) return;
         // A local edit made while this read was pending has its own sync request.
         // Read again after it settles instead of adopting this older snapshot.
@@ -324,20 +348,56 @@ function App() {
 
   const syncThreadsToServer = useCallback(
     async (nextThreads: DiffCommentThread[]) => {
+      const operations = commentOperations(syncedThreadsRef.current, nextThreads);
+      syncedThreadsRef.current = nextThreads;
+      if (!operations.length) return;
+      const capturedContext = commentsContextKey;
+      const writeId = crypto.randomUUID();
+      const pendingKey = `difit-pending-comments/${capturedContext}/${writeId}`;
+      localStorage.setItem(pendingKey, JSON.stringify({ operations, writeId }));
       pendingCommentSyncRef.current++;
+      const previousSave = saveQueueRef.current;
+      let finishSave!: () => void;
+      saveQueueRef.current = new Promise<void>((resolve) => {
+        finishSave = resolve;
+      });
+      await previousSave;
       try {
         const generation = reviewReset.generationRef.current;
+        const pendingPrefix = `difit-pending-comments/${capturedContext}/`;
+        const orderedWrites = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).filter((key): key is string => !!key?.startsWith(pendingPrefix));
+        const ownIndex = orderedWrites.indexOf(pendingKey);
+        const olderWrites = ownIndex >= 0 ? orderedWrites.slice(0, ownIndex) : [];
+        for (const key of olderWrites) {
+          const recovered = await fetch(getCommentApiUrl('/api/comments'), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: localStorage.getItem(key),
+          });
+          if (!recovered.ok)
+            throw new Error(
+              'Earlier review saves are still pending. Your comments remain on this device.',
+            );
+          localStorage.removeItem(key);
+        }
         const response = await fetch(getCommentApiUrl('/api/comments'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            threads: nextThreads,
+            operations,
+            writeId,
             baseVersion: serverCommentVersionRef.current ?? undefined,
           }),
         });
-        if (!response.ok) {
-          return;
-        }
+        if (!response.ok)
+          throw new Error(
+            'Review save failed. Your comments remain on this device. Retry by editing the comment.',
+          );
+        localStorage.removeItem(pendingKey);
+        if (commentsContextRef.current !== capturedContext) return;
+        setCommentSaveError(null);
 
         const result = (await response.json()) as {
           version?: number;
@@ -358,16 +418,27 @@ function App() {
           Array.isArray(result.threads)
         ) {
           skipNextCommentSyncRef.current = true;
+          syncedThreadsRef.current = result.threads;
           replaceThreads(result.threads);
         }
+      } catch (cause) {
+        if (commentsContextRef.current === capturedContext) setCommentSaveError(String(cause));
+        throw cause;
       } finally {
+        finishSave();
         pendingCommentSyncRef.current--;
         if (pendingCommentSyncRef.current === 0 && pendingCommentRefreshRef.current) {
           void handleCommentsChanged();
         }
       }
     },
-    [getCommentApiUrl, handleCommentsChanged, replaceThreads, reviewReset.generationRef],
+    [
+      commentsContextKey,
+      getCommentApiUrl,
+      handleCommentsChanged,
+      replaceThreads,
+      reviewReset.generationRef,
+    ],
   );
 
   // Viewed files management
@@ -384,7 +455,7 @@ function App() {
     diffData?.commit,
     undefined,
     diffData?.files,
-    diffData?.repositoryId, // Repository identifier for storage isolation
+    diffData?.reviewId ? `${diffData.repositoryId}/${diffData.reviewId}` : undefined, // Review-scoped browser cache
     settings.autoViewedPatterns,
     resolvedSelection?.baseMode,
   );
@@ -1076,7 +1147,7 @@ function App() {
     }
 
     const resetGeneration = reviewReset.generationRef.current;
-    const shouldReplaceFromServer = pendingBootstrapAfterLocalResetRef.current;
+
     pendingBootstrapAfterLocalResetRef.current = false;
 
     bootstrappingCommentsKeyRef.current = commentsContextKey;
@@ -1084,31 +1155,68 @@ function App() {
 
     const bootstrapComments = async () => {
       try {
+        // Repository-wide legacy comments have no trustworthy branch attribution.
+        // Import them intact into the explicit unassigned collection first.
+        if (diffData?.repositoryId) {
+          const { loadReviewComments } = await import('./services/reviewComments');
+          const historical = loadReviewComments(diffData.repositoryId);
+          if (historical.threads.length) {
+            const imported = await fetch('/api/reviews/unassigned', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ threads: historical.threads }),
+            });
+            if (!imported.ok)
+              throw new Error('Historical comments could not be preserved on the host');
+            const verified = (await imported.json()) as { count: number; messageCount: number };
+            if (
+              verified.count !== historical.threads.length ||
+              verified.messageCount !==
+                historical.threads.reduce((count, thread) => count + thread.messages.length, 0)
+            )
+              throw new Error('Historical comment verification failed');
+          }
+        }
+        const pendingPrefix = `difit-pending-comments/${commentsContextKey}/`;
+        const pendingKeys = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index),
+        ).filter((key): key is string => !!key?.startsWith(pendingPrefix));
+        for (const key of pendingKeys) {
+          const response = await fetch(getCommentApiUrl('/api/comments'), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: localStorage.getItem(key),
+          });
+          if (!response.ok)
+            throw new Error(
+              'Pending comment saves could not be recovered. Your comments remain on this device.',
+            );
+          localStorage.removeItem(key);
+        }
         const serverThreads = await fetchServerThreads();
-        const nextThreads = shouldReplaceFromServer
-          ? serverThreads
-          : mergeCommentThreads(serverThreads, threads).threads;
-        if (cancelled || resetGeneration !== reviewReset.generationRef.current) {
+        const nextThreads = serverThreads;
+        if (
+          cancelled ||
+          commentsContextRef.current !== commentsContextKey ||
+          resetGeneration !== reviewReset.generationRef.current
+        ) {
           return;
         }
 
         skipNextCommentSyncRef.current = true;
         replaceThreads(nextThreads);
+        setBootstrappedCommentsKey(commentsContextKey);
+        setCommentSaveError(null);
 
-        if (
-          !shouldReplaceFromServer &&
-          JSON.stringify(serverThreads) !== JSON.stringify(nextThreads)
-        ) {
+        if (JSON.stringify(serverThreads) !== JSON.stringify(nextThreads)) {
           await syncThreadsToServer(nextThreads);
         }
       } catch (commentsError) {
         if (!cancelled) {
           console.error('Failed to bootstrap comments from server:', commentsError);
+          setCommentSaveError(String(commentsError));
         }
       } finally {
-        if (!cancelled) {
-          setBootstrappedCommentsKey(commentsContextKey);
-        }
         if (bootstrappingCommentsKeyRef.current === commentsContextKey) {
           bootstrappingCommentsKeyRef.current = null;
         }
@@ -1128,6 +1236,8 @@ function App() {
     commentsContextKey,
     fetchServerThreads,
     hasLoadedComments,
+    getCommentApiUrl,
+    diffData?.repositoryId,
     replaceThreads,
     syncThreadsToServer,
     threads,
@@ -1159,34 +1269,14 @@ function App() {
       return;
     }
 
-    const data = JSON.stringify({
-      threads,
-      baseVersion: serverCommentVersionRef.current ?? undefined,
-    });
-    const commentsApiUrl = getCommentApiUrl('/api/comments');
-
-    // Also handle page unload
-    const sendCommentsBeforeUnload = () => {
-      // Use sendBeacon for reliable delivery during page unload, including empty states.
-      navigator.sendBeacon(commentsApiUrl, data);
-    };
-
-    window.addEventListener('beforeunload', sendCommentsBeforeUnload);
-
     if (skipNextCommentSyncRef.current) {
       skipNextCommentSyncRef.current = false;
-      return () => {
-        window.removeEventListener('beforeunload', sendCommentsBeforeUnload);
-      };
+      return;
     }
 
     syncThreadsToServer(threads).catch((syncError) => {
       console.error('Failed to sync comments:', syncError);
     });
-
-    return () => {
-      window.removeEventListener('beforeunload', sendCommentsBeforeUnload);
-    };
   }, [getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
 
   // Establish SSE connection for tab close detection
@@ -1354,473 +1444,483 @@ function App() {
   );
 
   return (
-    <WordHighlightProvider>
-      <div
-        className="h-screen flex flex-col"
-        onClickCapture={handleGlobalClick}
-        data-minimal-ui={minimalUI}
-        data-minimal-desktop={minimalDesktop}
-        style={
-          minimalDesktop
-            ? {
-                gridTemplateColumns: `${isFileTreeOpen ? sidebarWidth : 0}px ${isFileTreeOpen ? 4 : 0}px minmax(0, 1fr)`,
-              }
-            : undefined
-        }
-      >
-        <header
-          className={`bg-github-bg-secondary border-b border-github-border flex ${
-            isMobile ? 'flex-col' : 'flex-row items-center'
-          }`}
+    <ReviewDrafts key={diffData?.reviewId} reviewId={diffData?.reviewId}>
+      {commentSaveError && <div role="alert">{commentSaveError}</div>}
+      <WordHighlightProvider>
+        <div
+          className="h-screen flex flex-col"
+          onClickCapture={handleGlobalClick}
+          data-minimal-ui={minimalUI}
+          data-minimal-desktop={minimalDesktop}
+          style={
+            minimalDesktop
+              ? {
+                  gridTemplateColumns: `${isFileTreeOpen ? sidebarWidth : 0}px ${isFileTreeOpen ? 4 : 0}px minmax(0, 1fr)`,
+                }
+              : undefined
+          }
         >
-          <div
-            data-review-brand
-            className={`flex items-center justify-between w-full ${
-              isMobile ? 'px-3 py-2 gap-3' : 'px-4 py-3 gap-4 w-auto'
-            } ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
-            style={{
-              width: isMobile ? '100%' : isFileTreeOpen ? `${sidebarWidth}px` : 'auto',
-              minWidth: isMobile ? '0px' : isFileTreeOpen ? '200px' : 'auto',
-              maxWidth: isMobile ? 'none' : isFileTreeOpen ? '600px' : 'none',
-            }}
-          >
-            <h1>
-              <Logo
-                style={{
-                  height: '18px',
-                  color: 'var(--color-github-text-secondary)',
-                }}
-              />
-            </h1>
-            {layoutControls}
-          </div>
-          {!isMobile && (
-            <div
-              data-review-header-divider
-              className={`border-r border-github-border ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
-              style={{
-                width: isFileTreeOpen ? '4px' : '0px',
-                height: 'calc(100% - 16px)',
-                margin: '8px 0',
-                transform: 'translateX(-2px)',
-              }}
-            />
-          )}
-          <div
-            className={`flex-1 flex flex-wrap items-center justify-between ${
-              isMobile ? 'px-3 pb-2 gap-3' : 'px-4 py-3 gap-4'
+          <header
+            className={`bg-github-bg-secondary border-b border-github-border flex ${
+              isMobile ? 'flex-col' : 'flex-row items-center'
             }`}
           >
-            <div className={`flex flex-wrap items-center ${isMobile ? 'gap-2' : 'gap-3'}`}>
-              {minimalUI && layoutControls}
-              {!isMobile && (
-                <div className="flex bg-github-bg-tertiary border border-github-border rounded-md p-1">
-                  <button
-                    onClick={() => handleDiffModeChange('split')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
-                      diffMode === 'split'
-                        ? 'bg-github-bg-primary text-github-text-primary shadow-sm'
-                        : 'text-github-text-secondary hover:text-github-text-primary'
-                    }`}
-                  >
-                    <Columns size={14} />
-                    Split
-                  </button>
-                  <button
-                    onClick={() => handleDiffModeChange('unified')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
-                      diffMode === 'unified'
-                        ? 'bg-github-bg-primary text-github-text-primary shadow-sm'
-                        : 'text-github-text-secondary hover:text-github-text-primary'
-                    }`}
-                  >
-                    <AlignLeft size={14} />
-                    Unified
-                  </button>
-                </div>
-              )}
-              <Checkbox
-                checked={ignoreWhitespace}
-                onChange={setIgnoreWhitespace}
-                label="Ignore Whitespace"
-                title={ignoreWhitespace ? 'Show whitespace changes' : 'Ignore whitespace changes'}
-              />
-              {/* File Watch Reload Button */}
-              {(!review.inventory || !reviewSettings.autoRefresh || watchError || refreshError) && (
-                <ReloadButton
-                  shouldReload={shouldReload || refreshError !== null}
-                  isReloading={watchState.isReloading}
-                  onReload={reload}
-                  changeType={watchState.lastChangeType}
-                  compact={isMobile}
-                />
-              )}
-              {(watchError || refreshError) && (
-                <span role="alert" className="text-xs text-github-danger">
-                  {watchError || refreshError}
-                </span>
-              )}
-            </div>
             <div
-              className={`flex flex-wrap items-center text-sm text-github-text-secondary ${
-                isMobile ? 'gap-3' : 'gap-4'
+              data-review-brand
+              className={`flex items-center justify-between w-full ${
+                isMobile ? 'px-3 py-2 gap-3' : 'px-4 py-3 gap-4 w-auto'
+              } ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+              style={{
+                width: isMobile ? '100%' : isFileTreeOpen ? `${sidebarWidth}px` : 'auto',
+                minWidth: isMobile ? '0px' : isFileTreeOpen ? '200px' : 'auto',
+                maxWidth: isMobile ? 'none' : isFileTreeOpen ? '600px' : 'none',
+              }}
+            >
+              <h1>
+                <Logo
+                  style={{
+                    height: '18px',
+                    color: 'var(--color-github-text-secondary)',
+                  }}
+                />
+              </h1>
+              {layoutControls}
+            </div>
+            {!isMobile && (
+              <div
+                data-review-header-divider
+                className={`border-r border-github-border ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+                style={{
+                  width: isFileTreeOpen ? '4px' : '0px',
+                  height: 'calc(100% - 16px)',
+                  margin: '8px 0',
+                  transform: 'translateX(-2px)',
+                }}
+              />
+            )}
+            <div
+              className={`flex-1 flex flex-wrap items-center justify-between ${
+                isMobile ? 'px-3 pb-2 gap-3' : 'px-4 py-3 gap-4'
               }`}
             >
-              {!isMobile && (threads.length > 0 || diffData.agentHandoff) && (
-                <CommentsDropdown
-                  commentsCount={threads.length}
-                  isCopiedAll={isCopiedAll}
-                  handoff={diffData.agentHandoff}
-                  pending={diffData.agentHandoff ? reviewExport.pending : clipboardExport.pending}
-                  copyPending={clipboardExport.pending}
-                  isCopiedToClipboard={clipboardExport.succeeded}
-                  onPassToAgent={handlePassToAgent}
-                  disabled={
-                    !hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')
-                  }
-                  onCopyAll={handleCopyAllComments}
-                  onDeleteAll={clearAllComments}
-                  onViewAll={() => setIsCommentsListOpen(true)}
+              <div className={`flex flex-wrap items-center ${isMobile ? 'gap-2' : 'gap-3'}`}>
+                {minimalUI && layoutControls}
+                {!isMobile && (
+                  <div className="flex bg-github-bg-tertiary border border-github-border rounded-md p-1">
+                    <button
+                      onClick={() => handleDiffModeChange('split')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                        diffMode === 'split'
+                          ? 'bg-github-bg-primary text-github-text-primary shadow-sm'
+                          : 'text-github-text-secondary hover:text-github-text-primary'
+                      }`}
+                    >
+                      <Columns size={14} />
+                      Split
+                    </button>
+                    <button
+                      onClick={() => handleDiffModeChange('unified')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                        diffMode === 'unified'
+                          ? 'bg-github-bg-primary text-github-text-primary shadow-sm'
+                          : 'text-github-text-secondary hover:text-github-text-primary'
+                      }`}
+                    >
+                      <AlignLeft size={14} />
+                      Unified
+                    </button>
+                  </div>
+                )}
+                <Checkbox
+                  checked={ignoreWhitespace}
+                  onChange={setIgnoreWhitespace}
+                  label="Ignore Whitespace"
+                  title={ignoreWhitespace ? 'Show whitespace changes' : 'Ignore whitespace changes'}
                 />
+                {/* File Watch Reload Button */}
+                {(!review.inventory ||
+                  !reviewSettings.autoRefresh ||
+                  watchError ||
+                  refreshError) && (
+                  <ReloadButton
+                    shouldReload={shouldReload || refreshError !== null}
+                    isReloading={watchState.isReloading}
+                    onReload={reload}
+                    changeType={watchState.lastChangeType}
+                    compact={isMobile}
+                  />
+                )}
+                {(watchError || refreshError) && (
+                  <span role="alert" className="text-xs text-github-danger">
+                    {watchError || refreshError}
+                  </span>
+                )}
+              </div>
+              <div
+                className={`flex flex-wrap items-center text-sm text-github-text-secondary ${
+                  isMobile ? 'gap-3' : 'gap-4'
+                }`}
+              >
+                {!isMobile && (threads.length > 0 || diffData.agentHandoff) && (
+                  <CommentsDropdown
+                    commentsCount={threads.length}
+                    isCopiedAll={isCopiedAll}
+                    handoff={diffData.agentHandoff}
+                    pending={diffData.agentHandoff ? reviewExport.pending : clipboardExport.pending}
+                    copyPending={clipboardExport.pending}
+                    isCopiedToClipboard={clipboardExport.succeeded}
+                    onPassToAgent={handlePassToAgent}
+                    disabled={
+                      !hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')
+                    }
+                    onCopyAll={handleCopyAllComments}
+                    onDeleteAll={clearAllComments}
+                    onViewAll={() => setIsCommentsListOpen(true)}
+                  />
+                )}
+                {!isMobile && exportError && (
+                  <span role="alert" className="text-xs text-github-danger max-w-64">
+                    {exportError}
+                  </span>
+                )}
+                <div className="flex flex-col gap-1 items-center">
+                  <div className="text-xs relative">
+                    {diffData.files.length > 0 && viewedFiles.size === diffData.files.length
+                      ? 'All diffs difit-ed!'
+                      : `${viewedFiles.size} / ${diffData.files.length} files viewed`}
+                    <SparkleAnimation isActive={showSparkles} />
+                    {viewedFiles.size > 0 && (
+                      <ResetViewedButton
+                        onReset={() => void resetViewedProgress()}
+                        disabled={!hasLoadedInitialViewedFiles}
+                      />
+                    )}
+                  </div>
+                  <div
+                    className="relative h-2 bg-github-bg-tertiary rounded-full overflow-hidden"
+                    style={{
+                      width: '90px',
+                      border: '1px solid var(--color-github-border)',
+                    }}
+                  >
+                    <div
+                      className="absolute top-0 right-0 h-full transition-all duration-300 ease-out"
+                      style={{
+                        width: `${((diffData.files.length - viewedFiles.size) / Math.max(1, diffData.files.length)) * 100}%`,
+                        backgroundColor: (() => {
+                          const remainingPercent =
+                            ((diffData.files.length - viewedFiles.size) /
+                              Math.max(1, diffData.files.length)) *
+                            100;
+                          if (remainingPercent > 50) return 'var(--color-github-accent)'; // green
+                          if (remainingPercent > 20) return 'var(--color-github-warning)'; // yellow
+                          return 'var(--color-github-danger)'; // red
+                        })(),
+                      }}
+                    />
+                  </div>
+                </div>
+                {review.inventory ? (
+                  <ReviewPicker
+                    inventory={review.inventory}
+                    range={review.range}
+                    active={review.active}
+                    notice={review.notice}
+                    error={review.error}
+                    busy={review.busy}
+                    ignoreWhitespace={ignoreWhitespace}
+                    onSelect={review.select}
+                    onTargetChange={(target) => void review.changeTarget(target)}
+                    onAdvanced={() => {
+                      review.useAdvanced();
+                      setIsRevisionModalOpen(true);
+                    }}
+                  />
+                ) : revisionOptions ? (
+                  <DiffQuickMenu
+                    options={revisionOptions}
+                    selection={selectedRevision}
+                    resolvedBaseRevision={resolvedBaseRevision}
+                    resolvedTargetRevision={resolvedTargetRevision}
+                    onSelectDiff={(selection) => void handleRevisionChange(selection)}
+                    onOpenAdvanced={() => setIsRevisionModalOpen(true)}
+                    compact={!isDesktop}
+                  />
+                ) : (
+                  <span className="text-xs">
+                    Reviewing:{' '}
+                    <code className="bg-github-bg-tertiary px-1.5 py-0.5 rounded text-xs text-github-text-primary">
+                      {diffData.commit.includes('...') ? (
+                        <>
+                          <span className="text-github-text-secondary font-medium">
+                            {diffData.commit.split('...')[0]}...
+                          </span>
+                          <span className="font-medium">{diffData.commit.split('...')[1]}</span>
+                        </>
+                      ) : (
+                        diffData.commit
+                      )}
+                    </code>
+                  </span>
+                )}
+              </div>
+            </div>
+          </header>
+          {revisionOptions && (
+            <RevisionDetailModal
+              key={isRevisionModalOpen ? getDiffSelectionKey(selectedRevision) : 'closed'}
+              isOpen={isRevisionModalOpen}
+              onClose={() => setIsRevisionModalOpen(false)}
+              options={revisionOptions}
+              selection={selectedRevision}
+              resolvedBaseRevision={resolvedBaseRevision}
+              resolvedTargetRevision={resolvedTargetRevision}
+              onApply={(selection) => void handleRevisionChange(selection)}
+            />
+          )}
+
+          {isMobile && isFileTreeOpen && (
+            <button
+              type="button"
+              aria-label="Close file tree"
+              className="fixed inset-0 bg-black/40 z-30"
+              onClick={() => setIsFileTreeOpen(false)}
+            />
+          )}
+
+          <div data-review-body className="flex flex-1 overflow-hidden relative">
+            <div
+              data-review-sidebar
+              className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+              style={{
+                width: isMobile ? '0px' : isFileTreeOpen ? `${sidebarWidth}px` : '0px',
+              }}
+            >
+              <aside
+                id="file-tree-panel"
+                className={`bg-github-bg-secondary overflow-y-auto flex flex-col ${
+                  isMobile
+                    ? 'fixed inset-y-0 right-0 z-40 w-[min(85vw,360px)] border-l border-github-border transition-transform duration-300 ease-out'
+                    : 'relative border-r border-github-border'
+                }`}
+                style={{
+                  width: isMobile ? 'min(85vw, 360px)' : `${sidebarWidth}px`,
+                  minWidth: isMobile ? '0px' : '200px',
+                  maxWidth: isMobile ? 'none' : '600px',
+                  height: '100%',
+                  transform: isMobile
+                    ? isFileTreeOpen
+                      ? 'translateX(0)'
+                      : 'translateX(100%)'
+                    : undefined,
+                }}
+              >
+                <div className="flex-1 overflow-y-auto">
+                  <FileList
+                    files={diffData.files}
+                    onScrollToFile={scrollFileIntoDiffContainer}
+                    onFileSelected={isMobile ? handleMobileFileSelected : undefined}
+                    comments={normalizedThreads}
+                    reviewedFiles={viewedFiles}
+                    onToggleReviewed={toggleFileReviewed}
+                    onToggleFolderReviewed={toggleFolderReviewed}
+                    selectedFileIndex={cursor?.fileIndex ?? null}
+                  />
+                </div>
+                {!isMobile && !settings.minimalUI && (
+                  <div className="p-4 border-t border-github-border flex justify-end items-center">
+                    <a
+                      href="https://github.com/yoshiko-pg/difit"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-github-text-secondary hover:text-github-text-primary transition-colors"
+                      title="View on GitHub"
+                    >
+                      <span className="text-sm">Star on GitHub</span>
+                      <GitHubIcon style={{ height: '18px', width: '18px' }} />
+                    </a>
+                  </div>
+                )}
+              </aside>
+            </div>
+
+            {!isMobile && (
+              <div
+                data-review-resizer
+                className={`bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+                style={{
+                  width: isFileTreeOpen ? '4px' : '0px',
+                }}
+                onMouseDown={handleMouseDown}
+                title="Drag to resize file list"
+              />
+            )}
+
+            <ReviewScrollContainer
+              containerRef={diffScrollContainerRef}
+              aria-busy={loading}
+              className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
+            >
+              {diffData.files.length === 0 && (
+                <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
+                  <p className="text-sm text-github-text-secondary">
+                    No changes in this comparison.
+                  </p>
+                  {review.error && (
+                    <p role="alert" className="text-xs text-github-danger">
+                      {review.error}
+                    </p>
+                  )}
+                </div>
               )}
-              {!isMobile && exportError && (
-                <span role="alert" className="text-xs text-github-danger max-w-64">
+              {diffData.files.map((file, fileIndex) => {
+                const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
+                const mergedChunks =
+                  getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path, file) ??
+                  getInitialMergedChunks(file);
+                const isRendered = renderedFilePaths.has(file.path);
+                return (
+                  <div
+                    key={file.path}
+                    id={getFileElementId(file.path)}
+                    data-file-path={file.path}
+                    data-rendered={isRendered ? 'true' : 'false'}
+                    ref={(node) => registerLazyFileContainer(file.path, node)}
+                    className="mb-6"
+                    onMouseEnter={() => {
+                      hoveredFileIndexRef.current = fileIndex;
+                    }}
+                    onMouseLeave={() => {
+                      if (hoveredFileIndexRef.current === fileIndex) {
+                        hoveredFileIndexRef.current = null;
+                      }
+                    }}
+                  >
+                    {isRendered ? (
+                      <DiffViewer
+                        file={file}
+                        threads={fileThreads}
+                        showAuthorBadges={showAuthorBadges}
+                        diffMode={diffMode}
+                        reviewedFiles={viewedFiles}
+                        isChangedSinceViewed={changedSinceViewedFiles.has(file.path)}
+                        onToggleReviewed={handleViewedButtonToggle}
+                        collapsedFiles={collapsedFiles}
+                        onToggleCollapsed={toggleFileCollapsed}
+                        onToggleAllCollapsed={toggleAllFilesCollapsed}
+                        onAddComment={handleAddComment}
+                        onGenerateThreadPrompt={handleGenerateThreadPrompt}
+                        onRemoveThread={removeThread}
+                        onReplyToThread={handleReplyToThread}
+                        onRemoveMessage={removeMessage}
+                        onUpdateMessage={updateMessage}
+                        onOpenInEditor={canOpenInEditor ? handleOpenInEditor : undefined}
+                        syntaxTheme={settings.syntaxTheme}
+                        baseCommitish={diffData.baseCommitish}
+                        targetCommitish={diffData.targetCommitish}
+                        cursor={cursor?.fileIndex === fileIndex ? cursor : null}
+                        isFocused={cursor?.fileIndex === fileIndex}
+                        fileIndex={fileIndex}
+                        onLineClick={handleLineClick}
+                        commentTrigger={
+                          commentTrigger?.fileIndex === fileIndex ? commentTrigger : null
+                        }
+                        onCommentTriggerHandled={handleCommentTriggerHandled}
+                        mergedChunks={mergedChunks}
+                        expandLines={expandLines}
+                        expandAllBetweenChunks={expandAllBetweenChunks}
+                        prefetchFileContent={prefetchFileContent}
+                        isExpandLoading={isExpandLoading}
+                        diffVersion={diffDataVersion}
+                      />
+                    ) : (
+                      <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs uppercase tracking-wide text-github-text-muted">
+                              Deferred Rendering
+                            </div>
+                            <div className="text-sm font-mono text-github-text-primary truncate">
+                              {file.path}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => ensureFileRendered(file.path)}
+                            className="px-3 py-1.5 text-xs rounded border border-github-border text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary"
+                          >
+                            Load now
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </ReviewScrollContainer>
+          </div>
+
+          {showMobileCommentsBar && (
+            <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
+              {exportError && (
+                <span role="alert" className="text-xs text-github-danger mr-3">
                   {exportError}
                 </span>
               )}
-              <div className="flex flex-col gap-1 items-center">
-                <div className="text-xs relative">
-                  {diffData.files.length > 0 && viewedFiles.size === diffData.files.length
-                    ? 'All diffs difit-ed!'
-                    : `${viewedFiles.size} / ${diffData.files.length} files viewed`}
-                  <SparkleAnimation isActive={showSparkles} />
-                  {viewedFiles.size > 0 && (
-                    <ResetViewedButton
-                      onReset={() => void resetViewedProgress()}
-                      disabled={!hasLoadedInitialViewedFiles}
-                    />
-                  )}
-                </div>
-                <div
-                  className="relative h-2 bg-github-bg-tertiary rounded-full overflow-hidden"
-                  style={{
-                    width: '90px',
-                    border: '1px solid var(--color-github-border)',
-                  }}
-                >
-                  <div
-                    className="absolute top-0 right-0 h-full transition-all duration-300 ease-out"
-                    style={{
-                      width: `${((diffData.files.length - viewedFiles.size) / Math.max(1, diffData.files.length)) * 100}%`,
-                      backgroundColor: (() => {
-                        const remainingPercent =
-                          ((diffData.files.length - viewedFiles.size) /
-                            Math.max(1, diffData.files.length)) *
-                          100;
-                        if (remainingPercent > 50) return 'var(--color-github-accent)'; // green
-                        if (remainingPercent > 20) return 'var(--color-github-warning)'; // yellow
-                        return 'var(--color-github-danger)'; // red
-                      })(),
-                    }}
-                  />
-                </div>
-              </div>
-              {review.inventory ? (
-                <ReviewPicker
-                  inventory={review.inventory}
-                  range={review.range}
-                  active={review.active}
-                  notice={review.notice}
-                  error={review.error}
-                  busy={review.busy}
-                  ignoreWhitespace={ignoreWhitespace}
-                  onSelect={review.select}
-                  onTargetChange={(target) => void review.changeTarget(target)}
-                  onAdvanced={() => {
-                    review.useAdvanced();
-                    setIsRevisionModalOpen(true);
-                  }}
-                />
-              ) : revisionOptions ? (
-                <DiffQuickMenu
-                  options={revisionOptions}
-                  selection={selectedRevision}
-                  resolvedBaseRevision={resolvedBaseRevision}
-                  resolvedTargetRevision={resolvedTargetRevision}
-                  onSelectDiff={(selection) => void handleRevisionChange(selection)}
-                  onOpenAdvanced={() => setIsRevisionModalOpen(true)}
-                  compact={!isDesktop}
-                />
-              ) : (
-                <span className="text-xs">
-                  Reviewing:{' '}
-                  <code className="bg-github-bg-tertiary px-1.5 py-0.5 rounded text-xs text-github-text-primary">
-                    {diffData.commit.includes('...') ? (
-                      <>
-                        <span className="text-github-text-secondary font-medium">
-                          {diffData.commit.split('...')[0]}...
-                        </span>
-                        <span className="font-medium">{diffData.commit.split('...')[1]}</span>
-                      </>
-                    ) : (
-                      diffData.commit
-                    )}
-                  </code>
-                </span>
-              )}
+              <CommentsDropdown
+                commentsCount={threads.length}
+                isCopiedAll={isCopiedAll}
+                handoff={diffData.agentHandoff}
+                pending={diffData.agentHandoff ? reviewExport.pending : clipboardExport.pending}
+                copyPending={clipboardExport.pending}
+                isCopiedToClipboard={clipboardExport.succeeded}
+                onPassToAgent={handlePassToAgent}
+                disabled={
+                  !hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')
+                }
+                onCopyAll={handleCopyAllComments}
+                onDeleteAll={clearAllComments}
+                onViewAll={() => setIsCommentsListOpen(true)}
+                direction="up"
+                compact
+              />
             </div>
-          </div>
-        </header>
-        {revisionOptions && (
-          <RevisionDetailModal
-            key={isRevisionModalOpen ? getDiffSelectionKey(selectedRevision) : 'closed'}
-            isOpen={isRevisionModalOpen}
-            onClose={() => setIsRevisionModalOpen(false)}
-            options={revisionOptions}
-            selection={selectedRevision}
-            resolvedBaseRevision={resolvedBaseRevision}
-            resolvedTargetRevision={resolvedTargetRevision}
-            onApply={(selection) => void handleRevisionChange(selection)}
-          />
-        )}
+          )}
 
-        {isMobile && isFileTreeOpen && (
-          <button
-            type="button"
-            aria-label="Close file tree"
-            className="fixed inset-0 bg-black/40 z-30"
-            onClick={() => setIsFileTreeOpen(false)}
-          />
-        )}
-
-        <div data-review-body className="flex flex-1 overflow-hidden relative">
-          <div
-            data-review-sidebar
-            className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
-            style={{
-              width: isMobile ? '0px' : isFileTreeOpen ? `${sidebarWidth}px` : '0px',
-            }}
-          >
-            <aside
-              id="file-tree-panel"
-              className={`bg-github-bg-secondary overflow-y-auto flex flex-col ${
-                isMobile
-                  ? 'fixed inset-y-0 right-0 z-40 w-[min(85vw,360px)] border-l border-github-border transition-transform duration-300 ease-out'
-                  : 'relative border-r border-github-border'
-              }`}
-              style={{
-                width: isMobile ? 'min(85vw, 360px)' : `${sidebarWidth}px`,
-                minWidth: isMobile ? '0px' : '200px',
-                maxWidth: isMobile ? 'none' : '600px',
-                height: '100%',
-                transform: isMobile
-                  ? isFileTreeOpen
-                    ? 'translateX(0)'
-                    : 'translateX(100%)'
-                  : undefined,
-              }}
-            >
-              <div className="flex-1 overflow-y-auto">
-                <FileList
-                  files={diffData.files}
-                  onScrollToFile={scrollFileIntoDiffContainer}
-                  onFileSelected={isMobile ? handleMobileFileSelected : undefined}
-                  comments={normalizedThreads}
-                  reviewedFiles={viewedFiles}
-                  onToggleReviewed={toggleFileReviewed}
-                  onToggleFolderReviewed={toggleFolderReviewed}
-                  selectedFileIndex={cursor?.fileIndex ?? null}
+          {isSettingsOpen && (
+            <SettingsModal
+              isOpen={isSettingsOpen}
+              onClose={() => setIsSettingsOpen(false)}
+              settings={settings}
+              onSettingsChange={updateSettings}
+              reviewSection={
+                <ReviewSettingsSection
+                  settings={reviewSettings}
+                  onChange={updateReviewSettings}
+                  review={reviewExport.prompt}
                 />
-              </div>
-              {!isMobile && !settings.minimalUI && (
-                <div className="p-4 border-t border-github-border flex justify-end items-center">
-                  <a
-                    href="https://github.com/yoshiko-pg/difit"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-github-text-secondary hover:text-github-text-primary transition-colors"
-                    title="View on GitHub"
-                  >
-                    <span className="text-sm">Star on GitHub</span>
-                    <GitHubIcon style={{ height: '18px', width: '18px' }} />
-                  </a>
-                </div>
-              )}
-            </aside>
-          </div>
-
-          {!isMobile && (
-            <div
-              data-review-resizer
-              className={`bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
-              style={{
-                width: isFileTreeOpen ? '4px' : '0px',
-              }}
-              onMouseDown={handleMouseDown}
-              title="Drag to resize file list"
+              }
             />
           )}
 
-          <ReviewScrollContainer
-            containerRef={diffScrollContainerRef}
-            aria-busy={loading}
-            className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
-          >
-            {diffData.files.length === 0 && (
-              <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 p-8 text-center">
-                <p className="text-sm text-github-text-secondary">No changes in this comparison.</p>
-                {review.error && (
-                  <p role="alert" className="text-xs text-github-danger">
-                    {review.error}
-                  </p>
-                )}
-              </div>
-            )}
-            {diffData.files.map((file, fileIndex) => {
-              const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
-              const mergedChunks =
-                getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path, file) ??
-                getInitialMergedChunks(file);
-              const isRendered = renderedFilePaths.has(file.path);
-              return (
-                <div
-                  key={file.path}
-                  id={getFileElementId(file.path)}
-                  data-file-path={file.path}
-                  data-rendered={isRendered ? 'true' : 'false'}
-                  ref={(node) => registerLazyFileContainer(file.path, node)}
-                  className="mb-6"
-                  onMouseEnter={() => {
-                    hoveredFileIndexRef.current = fileIndex;
-                  }}
-                  onMouseLeave={() => {
-                    if (hoveredFileIndexRef.current === fileIndex) {
-                      hoveredFileIndexRef.current = null;
-                    }
-                  }}
-                >
-                  {isRendered ? (
-                    <DiffViewer
-                      file={file}
-                      threads={fileThreads}
-                      showAuthorBadges={showAuthorBadges}
-                      diffMode={diffMode}
-                      reviewedFiles={viewedFiles}
-                      isChangedSinceViewed={changedSinceViewedFiles.has(file.path)}
-                      onToggleReviewed={handleViewedButtonToggle}
-                      collapsedFiles={collapsedFiles}
-                      onToggleCollapsed={toggleFileCollapsed}
-                      onToggleAllCollapsed={toggleAllFilesCollapsed}
-                      onAddComment={handleAddComment}
-                      onGenerateThreadPrompt={handleGenerateThreadPrompt}
-                      onRemoveThread={removeThread}
-                      onReplyToThread={handleReplyToThread}
-                      onRemoveMessage={removeMessage}
-                      onUpdateMessage={updateMessage}
-                      onOpenInEditor={canOpenInEditor ? handleOpenInEditor : undefined}
-                      syntaxTheme={settings.syntaxTheme}
-                      baseCommitish={diffData.baseCommitish}
-                      targetCommitish={diffData.targetCommitish}
-                      cursor={cursor?.fileIndex === fileIndex ? cursor : null}
-                      isFocused={cursor?.fileIndex === fileIndex}
-                      fileIndex={fileIndex}
-                      onLineClick={handleLineClick}
-                      commentTrigger={
-                        commentTrigger?.fileIndex === fileIndex ? commentTrigger : null
-                      }
-                      onCommentTriggerHandled={handleCommentTriggerHandled}
-                      mergedChunks={mergedChunks}
-                      expandLines={expandLines}
-                      expandAllBetweenChunks={expandAllBetweenChunks}
-                      prefetchFileContent={prefetchFileContent}
-                      isExpandLoading={isExpandLoading}
-                      diffVersion={diffDataVersion}
-                    />
-                  ) : (
-                    <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-xs uppercase tracking-wide text-github-text-muted">
-                            Deferred Rendering
-                          </div>
-                          <div className="text-sm font-mono text-github-text-primary truncate">
-                            {file.path}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => ensureFileRendered(file.path)}
-                          className="px-3 py-1.5 text-xs rounded border border-github-border text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary"
-                        >
-                          Load now
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </ReviewScrollContainer>
-        </div>
+          <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
 
-        {showMobileCommentsBar && (
-          <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
-            {exportError && (
-              <span role="alert" className="text-xs text-github-danger mr-3">
-                {exportError}
-              </span>
-            )}
-            <CommentsDropdown
-              commentsCount={threads.length}
-              isCopiedAll={isCopiedAll}
-              handoff={diffData.agentHandoff}
-              pending={diffData.agentHandoff ? reviewExport.pending : clipboardExport.pending}
-              copyPending={clipboardExport.pending}
-              isCopiedToClipboard={clipboardExport.succeeded}
-              onPassToAgent={handlePassToAgent}
-              disabled={!hasBootstrappedComments || !reviewSettings.template.includes('{{review}}')}
-              onCopyAll={handleCopyAllComments}
-              onDeleteAll={clearAllComments}
-              onViewAll={() => setIsCommentsListOpen(true)}
-              direction="up"
-              compact
-            />
-          </div>
-        )}
-
-        {isSettingsOpen && (
-          <SettingsModal
-            isOpen={isSettingsOpen}
-            onClose={() => setIsSettingsOpen(false)}
-            settings={settings}
-            onSettingsChange={updateSettings}
-            reviewSection={
-              <ReviewSettingsSection
-                settings={reviewSettings}
-                onChange={updateReviewSettings}
-                review={reviewExport.prompt}
-              />
-            }
+          <CommentsListModal
+            isOpen={isCommentsListOpen}
+            onClose={() => setIsCommentsListOpen(false)}
+            onNavigate={handleNavigateToComment}
+            comments={normalizedThreads}
+            showAuthorBadges={showAuthorBadges}
+            onRemoveThread={removeThread}
+            onGenerateThreadPrompt={handleGenerateThreadPrompt}
+            onReplyToThread={handleReplyToThread}
+            onRemoveMessage={removeMessage}
+            onUpdateMessage={updateMessage}
+            syntaxTheme={settings.syntaxTheme}
           />
-        )}
-
-        <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
-
-        <CommentsListModal
-          isOpen={isCommentsListOpen}
-          onClose={() => setIsCommentsListOpen(false)}
-          onNavigate={handleNavigateToComment}
-          comments={normalizedThreads}
-          showAuthorBadges={showAuthorBadges}
-          onRemoveThread={removeThread}
-          onGenerateThreadPrompt={handleGenerateThreadPrompt}
-          onReplyToThread={handleReplyToThread}
-          onRemoveMessage={removeMessage}
-          onUpdateMessage={updateMessage}
-          syntaxTheme={settings.syntaxTheme}
-        />
-      </div>
-    </WordHighlightProvider>
+        </div>
+      </WordHighlightProvider>
+    </ReviewDrafts>
   );
 }
 
