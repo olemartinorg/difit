@@ -88,6 +88,19 @@ describe('native review persistence API', () => {
     return { store, head, review, api, origin, post, captures };
   }
 
+  it('resolves an honest empty-tree base when no branch target can be selected', async () => {
+    const { api, head } = await fixture();
+    const { createHash } = await import('node:crypto');
+    const format = git('rev-parse', '--show-object-format');
+    const emptyTree = createHash(format).update('tree 0\0').digest('hex');
+    const request = { query: { reviewBranch: 'trunk' }, body: undefined } as unknown as Request;
+    const review = await api.resolve(request, { baseCommitish: emptyTree, targetCommitish: head });
+    expect(review.subject).toMatchObject({ head, base: emptyTree, baseHead: emptyTree });
+    await expect(
+      api.resolve(request, { baseCommitish: 'missing-ref', targetCommitish: head }),
+    ).rejects.toThrow();
+  });
+
   it('captures the actual selected comparison IDs after changing a review target', async () => {
     const f = await fixture();
     git('commit', '--allow-empty', '-qm', 'alternative comparison target');

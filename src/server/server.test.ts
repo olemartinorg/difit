@@ -27,6 +27,7 @@ vi.mock('simple-git', () => ({
             .update(ref ?? 'HEAD')
             .digest('hex'),
     raw: async (args: string[]) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-object-format') return 'sha1';
       if (args[0] === 'symbolic-ref') return 'fixture-branch';
       if (args[0] === 'merge-base') return args[1] ?? '';
       if (args[0] === 'rev-list') return '1';
