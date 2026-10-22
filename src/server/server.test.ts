@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -14,6 +15,75 @@ import type { CommentImport } from '../types/diff.js';
 const { fetch } = await import('undici');
 globalThis.fetch = fetch as any;
 const parserInstances = vi.hoisted(() => [] as any[]);
+
+// These tests exercise HTTP behavior with a parser fixture. Native identity
+// observations use full OIDs without touching the checkout running the suite.
+vi.mock('simple-git', () => ({
+  simpleGit: () => ({
+    revparse: async ([ref]: string[]) =>
+      /^[a-f0-9]{40}$/.test(ref?.replace(/\^\{commit\}$/, '') ?? '')
+        ? ref?.replace(/\^\{commit\}$/, '')
+        : createHash('sha1')
+            .update(ref ?? 'HEAD')
+            .digest('hex'),
+    raw: async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') return 'fixture-branch';
+      if (args[0] === 'merge-base') return args[1] ?? '';
+      if (args[0] === 'rev-list') return '1';
+      if (args[0] === 'config') throw new Error('No configured value');
+      return '';
+    },
+  }),
+}));
+
+function commentFields(
+  comments: Array<{
+    id?: string;
+    file?: string;
+    line: number | number[];
+    body: string;
+    side?: string;
+    timestamp?: string;
+  }>,
+) {
+  return comments.map((comment, index) => {
+    const id = comment.id ?? `comment-${index}`,
+      timestamp = comment.timestamp ?? '2026-10-22T00:00:00Z';
+    return {
+      kind: 'thread',
+      id,
+      value: {
+        id,
+        filePath: comment.file ?? '<unknown file>',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        position: {
+          side: comment.side ?? 'new',
+          line: Array.isArray(comment.line)
+            ? { start: comment.line[0], end: comment.line[1] }
+            : comment.line,
+        },
+        messages: [{ id, body: comment.body, createdAt: timestamp, updatedAt: timestamp }],
+      },
+    };
+  });
+}
+async function assignUnassigned(port: number) {
+  const unassigned = (await (
+    await fetch(`http://localhost:${port}/api/reviews/unassigned`)
+  ).json()) as Record<string, unknown>;
+  const review = (await (await fetch(`http://localhost:${port}/api/review-state`)).json()) as {
+    id: string;
+  };
+  for (const id of Object.keys(unassigned)) {
+    const assigned = await fetch(
+      `http://localhost:${port}/api/reviews/unassigned/${id}/assign?reviewId=${review.id}`,
+      { method: 'POST' },
+    );
+    expect(assigned.ok).toBe(true);
+  }
+  return review.id;
+}
 
 // Helper function to get available port
 async function getAvailablePort(preferredPort: number): Promise<number> {
@@ -128,7 +198,7 @@ describe('Server Integration Tests', () => {
         const response = await fetch(`http://localhost:${result.port}/api/comments`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ comments }),
+          body: JSON.stringify({ operations: commentFields(comments) }),
         });
 
         expect(response.status).toBe(200);
@@ -137,7 +207,7 @@ describe('Server Integration Tests', () => {
           merged: boolean;
           version: number;
         };
-        expect(apiResult).toMatchObject({ success: true, merged: false });
+        expect(apiResult).toMatchObject({ success: true, merged: true });
         expect(typeof apiResult.version).toBe('number');
 
         // Verify the formatted output
@@ -158,7 +228,7 @@ describe('Server Integration Tests', () => {
       }
     });
 
-    it('should handle comments with missing file property gracefully', async () => {
+    it('formats the explicit unknown-file placeholder without undefined output', async () => {
       const port = await getAvailablePort(4966);
       const result = await startServer({
         preferredPort: port,
@@ -179,7 +249,7 @@ describe('Server Integration Tests', () => {
         const response = await fetch(`http://localhost:${result.port}/api/comments`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ comments: commentsWithMissingFile }),
+          body: JSON.stringify({ operations: commentFields(commentsWithMissingFile) }),
         });
 
         expect(response.status).toBe(200);
@@ -213,7 +283,14 @@ describe('Server Integration Tests', () => {
       fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threads, baseVersion }),
+        body: JSON.stringify({
+          operations: threads.map((value) => ({
+            kind: 'thread',
+            id: (value as { id: string }).id,
+            value,
+          })),
+          baseVersion,
+        }),
       });
 
     const getSession = async (port: number) => {
@@ -224,7 +301,7 @@ describe('Server Integration Tests', () => {
       };
     };
 
-    it('merges concurrent agent additions instead of clobbering on a stale push', async () => {
+    it('keeps an explicitly assigned agent addition when a stale client saves another thread', async () => {
       const port = await getAvailablePort(4966);
       const result = await startServer({
         preferredPort: port,
@@ -253,9 +330,9 @@ describe('Server Integration Tests', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(agentImport),
         });
+        await assignUnassigned(result.port);
 
-        // The browser, unaware of the agent's thread, pushes its stale set
-        // tagged with the version it last observed (1).
+        // The browser saves its own thread with the version it last observed.
         const staleResponse = await postThreads(
           result.port,
           [makeThread('t1', 'src/a.ts', 10, 'human thread')],
@@ -278,7 +355,7 @@ describe('Server Integration Tests', () => {
       }
     });
 
-    it('replaces (honoring deletions) when the push version matches', async () => {
+    it('applies an explicit thread deletion without requiring an optimistic version match', async () => {
       const port = await getAvailablePort(4966);
       const result = await startServer({
         preferredPort: port,
@@ -291,11 +368,17 @@ describe('Server Integration Tests', () => {
         expect(afterFirst.version).toBe(1);
         expect(afterFirst.threads).toHaveLength(1);
 
-        // Same version means no concurrent writer, so an empty set is a real
-        // deletion and must be honored (not merged back).
-        const response = await postThreads(result.port, [], afterFirst.version);
+        // An explicit deletion is applied even with an outdated observed version.
+        const response = await fetch(`http://localhost:${result.port}/api/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            operations: [{ kind: 'thread', id: 't1', value: null }],
+            baseVersion: 0,
+          }),
+        });
         const body = (await response.json()) as { merged: boolean };
-        expect(body.merged).toBe(false);
+        expect(body.merged).toBe(true);
 
         const final = await getSession(result.port);
         expect(final.threads).toHaveLength(0);
@@ -308,49 +391,40 @@ describe('Server Integration Tests', () => {
       }
     });
 
-    it('bumps the version when a reply is imported (so the change is broadcast)', async () => {
-      const port = await getAvailablePort(4966);
+    it('bumps the committed version when an affected reply is saved', async () => {
       const result = await startServer({
-        preferredPort: port,
+        preferredPort: await getAvailablePort(4966),
         openBrowser: false,
       });
-
       try {
         await postThreads(result.port, [makeThread('t1', 'src/a.ts', 10, 'human thread')]);
         const before = await getSession(result.port);
-
-        // A reply via comment-imports must register as a change — otherwise the
-        // server skips the commentsChanged broadcast and open browsers go stale.
-        await fetch(`http://localhost:${result.port}/api/comment-imports`, {
+        const reply = makeThread('reply', 'src/a.ts', 10, 'agent reply').messages[0];
+        const response = await fetch(`http://localhost:${result.port}/api/comments`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([
-            {
-              type: 'reply',
-              filePath: 'src/a.ts',
-              position: { side: 'new', line: 10 },
-              body: 'agent reply',
-              author: 'Agent',
-            },
-          ] satisfies CommentImport[]),
+          body: JSON.stringify({
+            operations: [{ kind: 'message', threadId: 't1', id: 'reply', value: reply }],
+          }),
         });
-
+        expect(response.ok).toBe(true);
         const after = await getSession(result.port);
         expect(after.version).toBeGreaterThan(before.version);
       } finally {
-        if (result.server) {
-          await new Promise<void>((resolve) => {
-            result.server!.close(() => resolve());
-          });
-        }
+        if (result.server)
+          await new Promise<void>((resolve) => result.server?.close(() => resolve()));
       }
     });
   });
 
   let servers: any[] = [];
   let originalProcessExit: any;
+  let reviewStoreDirectory: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    reviewStoreDirectory = await fs.mkdtemp(join(tmpdir(), 'difit-server-review-'));
+    vi.stubEnv('DIFIT_REVIEW_STORE', reviewStoreDirectory);
+    vi.stubEnv('DIFIT_REVIEW_OWNER', 'private-server-test');
     // Mock process.exit to prevent tests from actually exiting
     originalProcessExit = process.exit;
     process.exit = vi.fn() as any;
@@ -370,6 +444,8 @@ describe('Server Integration Tests', () => {
       }
     }
     servers = [];
+    await fs.rm(reviewStoreDirectory, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   describe('Server startup', () => {
@@ -753,7 +829,7 @@ describe('Server Integration Tests', () => {
       const response = await fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments }),
+        body: JSON.stringify({ operations: commentFields(comments) }),
       });
 
       const data = await response.json();
@@ -770,7 +846,7 @@ describe('Server Integration Tests', () => {
       const response = await fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments }),
+        body: JSON.stringify({ operations: commentFields(comments) }),
       });
 
       const data = await response.json();
@@ -784,7 +860,7 @@ describe('Server Integration Tests', () => {
       const response = await fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ comments }),
+        body: JSON.stringify({ operations: commentFields(comments) }),
       });
 
       const data = await response.json();
@@ -802,7 +878,7 @@ describe('Server Integration Tests', () => {
       await fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments }),
+        body: JSON.stringify({ operations: commentFields(comments) }),
       });
 
       // Then get the output
@@ -829,7 +905,7 @@ describe('Server Integration Tests', () => {
       await fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments }),
+        body: JSON.stringify({ operations: commentFields(comments) }),
       });
 
       // Then get the output
@@ -914,7 +990,7 @@ describe('Server Integration Tests', () => {
       await fetch(`http://localhost:${port}/api/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments }),
+        body: JSON.stringify({ operations: commentFields(comments) }),
       });
 
       const response = await fetch(`http://localhost:${port}/api/comments-json`);
@@ -925,7 +1001,7 @@ describe('Server Integration Tests', () => {
       expect(data.threads[0].messages[0].body).toBe('JSON test comment');
     });
 
-    it('POST /api/comment-imports merges into server-side threads for comments-output', async () => {
+    it('POST /api/comment-imports requires explicit assignment before appearing for comments-output', async () => {
       const imports = [
         {
           type: 'thread',
@@ -940,6 +1016,7 @@ describe('Server Integration Tests', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(imports),
       });
+      await assignUnassigned(port);
 
       const outputResponse = await fetch(`http://localhost:${port}/api/comments-output`);
       const output = await outputResponse.text();
@@ -948,29 +1025,22 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('Merged server-side comment');
     });
 
-    it('POST /api/comment-imports merges reply into existing thread', async () => {
-      // First add a thread
-      await fetch(`http://localhost:${port}/api/comment-imports`, {
+    it('POST /api/comment-imports preserves a bundled root and reply until explicit assignment', async () => {
+      const response = await fetch(`http://localhost:${port}/api/comment-imports`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([
           {
             type: 'thread',
+            id: 'imported-root',
             filePath: 'src/reply-test.ts',
             position: { side: 'new', line: 5 },
             body: 'Original comment',
             author: 'User',
           },
-        ]),
-      });
-
-      // Then add a reply
-      await fetch(`http://localhost:${port}/api/comment-imports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify([
           {
             type: 'reply',
+            id: 'imported-reply',
             filePath: 'src/reply-test.ts',
             position: { side: 'new', line: 5 },
             body: 'Reply to comment',
@@ -978,15 +1048,23 @@ describe('Server Integration Tests', () => {
           },
         ]),
       });
-
-      const jsonResponse = await fetch(`http://localhost:${port}/api/comments-json`);
-      const data = (await jsonResponse.json()) as any;
-
-      const thread = data.threads.find((t: any) => t.filePath === 'src/reply-test.ts');
-      expect(thread).toBeDefined();
-      expect(thread.messages).toHaveLength(2);
-      expect(thread.messages[0].body).toBe('Original comment');
-      expect(thread.messages[1].body).toBe('Reply to comment');
+      expect(response.ok).toBe(true);
+      expect(
+        (
+          (await (await fetch(`http://localhost:${port}/api/comments-json`)).json()) as {
+            threads: unknown[];
+          }
+        ).threads,
+      ).toEqual([]);
+      await assignUnassigned(port);
+      const data = (await (await fetch(`http://localhost:${port}/api/comments-json`)).json()) as {
+        threads: Array<{ messages: Array<{ body: string }> }>;
+      };
+      expect(data.threads).toHaveLength(1);
+      expect(data.threads[0]?.messages.map((message) => message.body)).toEqual([
+        'Original comment',
+        'Reply to comment',
+      ]);
     });
 
     it('POST /api/comment-imports deduplicates identical imports', async () => {
@@ -1011,6 +1089,7 @@ describe('Server Integration Tests', () => {
         body: JSON.stringify(imports),
       });
 
+      await assignUnassigned(port);
       const jsonResponse = await fetch(`http://localhost:${port}/api/comments-json`);
       const data = (await jsonResponse.json()) as any;
 
@@ -1032,6 +1111,7 @@ describe('Server Integration Tests', () => {
           },
         ]),
       });
+      await assignUnassigned(port);
 
       const beforeResponse = await fetch(`http://localhost:${port}/api/comments-json`);
       const before = (await beforeResponse.json()) as any;
@@ -1045,7 +1125,6 @@ describe('Server Integration Tests', () => {
       expect(deleteResponse.ok).toBe(true);
       expect(deleteData).toMatchObject({
         success: true,
-        threadId: 'delete-me',
       });
       expect(deleteData.version).toBe(before.version + 1);
 
@@ -1054,15 +1133,13 @@ describe('Server Integration Tests', () => {
       expect(after.threads.some((t: any) => t.id === 'delete-me')).toBe(false);
     });
 
-    it('DELETE /api/comments/:threadId returns 404 for unknown thread', async () => {
+    it('DELETE /api/comments/:threadId is idempotent for an already absent thread', async () => {
       const response = await fetch(`http://localhost:${port}/api/comments/does-not-exist`, {
         method: 'DELETE',
       });
 
-      expect(response.status).toBe(404);
-      const data = (await response.json()) as any;
-      expect(data).toHaveProperty('error');
-      expect(data.error).toContain('does-not-exist');
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ success: true });
     });
 
     describe('user settings API', () => {
@@ -1142,7 +1219,7 @@ describe('Server Integration Tests', () => {
       });
     });
 
-    it('shares repository comments between different diff selections', async () => {
+    it('keeps explicitly assigned review comments while changing the comparison', async () => {
       const importServer = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
         preferredPort: 9039,
@@ -1157,6 +1234,7 @@ describe('Server Integration Tests', () => {
       });
       servers.push(importServer.server);
 
+      await assignUnassigned(importServer.port);
       const parser = parserInstances.at(-1);
       parser?.parseDiff.mockImplementation(async (selection: any) => ({
         targetCommit: 'abc123',
@@ -1193,6 +1271,7 @@ describe('Server Integration Tests', () => {
           },
         ]),
       });
+      await assignUnassigned(importServer.port);
 
       let response = await fetch(`http://localhost:${importServer.port}/api/comments-output`);
       let output = await response.text();
@@ -1220,6 +1299,7 @@ describe('Server Integration Tests', () => {
           },
         ]),
       });
+      await assignUnassigned(importServer.port);
 
       response = await fetch(`http://localhost:${importServer.port}/api/comments-output`);
       output = await response.text();

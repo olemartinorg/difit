@@ -3,7 +3,7 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 
-import { mockFetch } from '../../vitest.setup';
+import { mockFetch as mockDefaultFetch } from '../../vitest.setup';
 import type { DiffCommentThread, DiffResponse } from '../types/diff';
 import type { ClientWatchState } from '../types/watch';
 import { DiffMode } from '../types/watch';
@@ -173,6 +173,7 @@ const renderApp = () => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  mockComments = [];
   vi.unstubAllEnvs();
   MockEventSource.clearInstances();
   mockViewedFiles = new Set<string>();
@@ -182,6 +183,8 @@ beforeEach(() => {
 });
 
 const mockDiffResponse: DiffResponse = {
+  reviewId: 'review-fixture',
+  repositoryId: 'repository-fixture',
   commit: 'abc123',
   baseCommitish: 'HEAD^',
   targetCommitish: 'HEAD',
@@ -199,6 +202,33 @@ const mockDiffResponse: DiffResponse = {
   ignoreWhitespace: false,
   isEmpty: false,
 };
+
+function mockReviewResponse(url: string): Response | undefined {
+  if (url.startsWith('/api/review-state'))
+    return new Response(JSON.stringify({ version: 0, forms: {} }), { status: 200 });
+  if (url === '/api/reviews/unassigned') return new Response(JSON.stringify({}), { status: 200 });
+  return undefined;
+}
+
+function mockFetch(response: DiffResponse): void {
+  mockDefaultFetch(response);
+  const defaultFetch = vi.mocked(global.fetch).getMockImplementation();
+  if (!defaultFetch) throw new Error('Default fetch fixture was not installed');
+  vi.mocked(global.fetch).mockImplementation((input, init) => {
+    const url = String(input);
+    const reviewResponse = mockReviewResponse(url);
+    if (reviewResponse) return Promise.resolve(reviewResponse);
+    if (url.startsWith('/api/comments-json'))
+      return Promise.resolve(
+        new Response(JSON.stringify({ version: 0, threads: mockComments }), { status: 200 }),
+      );
+    if (url.startsWith('/api/comments?'))
+      return Promise.resolve(
+        new Response(JSON.stringify({ success: true, version: 1 }), { status: 200 }),
+      );
+    return defaultFetch(input, init);
+  });
+}
 
 describe('App Component - Clear Comments Functionality', () => {
   beforeEach(() => {
@@ -390,6 +420,8 @@ describe('App Component - Clear Comments Functionality', () => {
 
       vi.mocked(global.fetch).mockImplementation((input) => {
         const url = String(input);
+        const reviewResponse = mockReviewResponse(url);
+        if (reviewResponse) return Promise.resolve(reviewResponse);
 
         if (url.startsWith('/api/comments-json')) {
           return Promise.resolve({
@@ -426,7 +458,7 @@ describe('App Component - Clear Comments Functionality', () => {
       });
 
       expect(vi.mocked(global.fetch)).toHaveBeenCalledWith(
-        '/api/comments-json?base=HEAD%5E&target=HEAD',
+        '/api/comments-json?reviewId=review-fixture&base=HEAD%5E&target=HEAD',
       );
     });
 
@@ -454,6 +486,8 @@ describe('App Component - Clear Comments Functionality', () => {
 
       vi.mocked(global.fetch).mockImplementation((input) => {
         const url = String(input);
+        const reviewResponse = mockReviewResponse(url);
+        if (reviewResponse) return Promise.resolve(reviewResponse);
 
         if (url.startsWith('/api/comments-json')) {
           return Promise.resolve({
@@ -561,40 +595,16 @@ describe('App Component - Comment sync', () => {
     mockFetch(mockDiffResponse);
   });
 
-  it('syncs an empty comment list after the last comment is resolved', async () => {
+  it('writes only the deleted thread after the last comment is resolved', async () => {
     mockComments = [
       createMockThread({ id: 'test-1', filePath: 'test.ts', line: 10, body: 'Test comment' }),
     ];
-
     const mockGlobalFetch = vi.mocked(global.fetch);
     const { rerender } = renderApp();
-
-    await waitFor(() => {
-      const commentCalls = mockGlobalFetch.mock.calls.filter(([url]) =>
-        String(url).startsWith('/api/comments?'),
-      );
-      expect(commentCalls).toHaveLength(1);
-
-      const [url, request] = commentCalls[0] as [string, RequestInit];
-      expect(url).toBe('/api/comments?base=HEAD%5E&target=HEAD');
-      expect(request.method).toBe('POST');
-      expect(JSON.parse(String(request.body))).toEqual({
-        threads: [
-          expect.objectContaining({
-            id: 'test-1',
-            filePath: 'test.ts',
-            position: { side: 'new', line: 10 },
-            messages: [
-              expect.objectContaining({
-                id: 'test-1',
-                body: 'Test comment',
-                author: 'User',
-              }),
-            ],
-          }),
-        ],
-      });
-    });
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith(mockComments));
+    expect(
+      mockGlobalFetch.mock.calls.filter(([url]) => String(url).startsWith('/api/comments?')),
+    ).toHaveLength(0);
 
     mockComments = [];
     rerender(
@@ -607,23 +617,29 @@ describe('App Component - Comment sync', () => {
       const commentCalls = mockGlobalFetch.mock.calls.filter(([url]) =>
         String(url).startsWith('/api/comments?'),
       );
-      expect(commentCalls).toHaveLength(2);
-
-      const [url, request] = commentCalls[1] as [string, RequestInit];
-      expect(url).toBe('/api/comments?base=HEAD%5E&target=HEAD');
+      expect(commentCalls).toHaveLength(1);
+      const [url, request] = commentCalls[0] as [string, RequestInit];
+      expect(url).toBe('/api/comments?reviewId=review-fixture&base=HEAD%5E&target=HEAD');
       expect(request.method).toBe('POST');
-      expect(JSON.parse(String(request.body))).toEqual({ threads: [] });
+      expect(JSON.parse(String(request.body))).toEqual({
+        operations: [{ kind: 'thread', id: 'test-1', value: null }],
+        writeId: expect.any(String),
+        baseVersion: 0,
+      });
     });
   });
 
   it('replays a remote change received while a local sync response is pending', async () => {
     const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
+    const [rootMessage] = root.messages;
+    if (!rootMessage) throw new Error('Root message fixture is missing');
     mockComments = [root];
     const { rerender } = renderApp();
     await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
     await act(async () => {});
     mockReplaceThreads.mockClear();
-    const originalFetch = vi.mocked(global.fetch).getMockImplementation()!;
+    const originalFetch = vi.mocked(global.fetch).getMockImplementation();
+    if (!originalFetch) throw new Error('Fetch fixture was not installed');
     let finish: ((value: Response) => void) | undefined;
     const remote = createMockThread({
       id: 'remote',
@@ -647,7 +663,7 @@ describe('App Component - Comment sync', () => {
     mockComments = [
       {
         ...root,
-        messages: [...root.messages, { ...root.messages[0]!, id: 'local', body: 'Local reply' }],
+        messages: [...root.messages, { ...rootMessage, id: 'local', body: 'Local reply' }],
       },
     ];
     rerender(
@@ -671,11 +687,14 @@ describe('App Component - Comment sync', () => {
 
   it('refreshes again without dropping a local reply when an earlier read finishes afterwards', async () => {
     const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
+    const [rootMessage] = root.messages;
+    if (!rootMessage) throw new Error('Root message fixture is missing');
     mockComments = [root];
     const { rerender } = renderApp();
     await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
     mockReplaceThreads.mockClear();
-    const originalFetch = vi.mocked(global.fetch).getMockImplementation()!;
+    const originalFetch = vi.mocked(global.fetch).getMockImplementation();
+    if (!originalFetch) throw new Error('Fetch fixture was not installed');
     let finish: ((value: Response) => void) | undefined;
     let reads = 0;
     const remote = createMockThread({
@@ -711,7 +730,7 @@ describe('App Component - Comment sync', () => {
     mockComments = [
       {
         ...root,
-        messages: [...root.messages, { ...root.messages[0]!, id: 'reply', body: 'New reply' }],
+        messages: [...root.messages, { ...rootMessage, id: 'reply', body: 'New reply' }],
       },
     ];
     rerender(
@@ -727,27 +746,36 @@ describe('App Component - Comment sync', () => {
     await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([...mockComments, remote]));
   });
 
-  it('sends an empty comment list on unload when no comments remain', async () => {
+  it('recovers pending affected-field saves before loading current comments', async () => {
     mockComments = [];
-    const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
-
+    const pending = {
+      operations: [{ kind: 'thread', id: 'resolved-thread', value: null }],
+      writeId: 'pending-write',
+    };
+    const pendingKey = 'difit-pending-comments/review-fixture/pending-write';
+    localStorage.setItem(pendingKey, JSON.stringify(pending));
+    const mockGlobalFetch = vi.mocked(global.fetch);
     renderApp();
 
-    await waitFor(() => {
-      expect(addEventListenerSpy).toHaveBeenCalledWith('beforeunload', expect.any(Function));
-    });
-
-    const beforeUnloadHandler = addEventListenerSpy.mock.calls.find(
-      ([eventName]) => eventName === 'beforeunload',
-    )?.[1] as (() => void) | undefined;
-    expect(beforeUnloadHandler).toBeDefined();
-    beforeUnloadHandler?.();
-
-    expect(navigator.sendBeacon).toHaveBeenCalledWith(
-      '/api/comments?base=HEAD%5E&target=HEAD',
-      JSON.stringify({ threads: [] }),
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([]));
+    const commentCalls = mockGlobalFetch.mock.calls.filter(([url]) =>
+      String(url).startsWith('/api/comments?'),
     );
-    addEventListenerSpy.mockRestore();
+    expect(commentCalls).toHaveLength(1);
+    expect(commentCalls[0]).toEqual([
+      '/api/comments?reviewId=review-fixture&base=HEAD%5E&target=HEAD',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(pending) }),
+    ]);
+    expect(localStorage.getItem(pendingKey)).toBeNull();
+    const writeIndex = mockGlobalFetch.mock.calls.findIndex(([url]) =>
+      String(url).startsWith('/api/comments?'),
+    );
+    const readIndex = mockGlobalFetch.mock.calls.findIndex(([url]) =>
+      String(url).startsWith('/api/comments-json?'),
+    );
+    expect(writeIndex).toBeLessThan(readIndex);
+    fireEvent(window, new Event('beforeunload'));
+    expect(navigator.sendBeacon).not.toHaveBeenCalled();
   });
 
   it('shows author badges in the comments modal when the diff has multiple authors', async () => {
@@ -833,8 +861,10 @@ describe('App Component - Diff Mode Persistence', () => {
     fireEvent.click(refreshButton);
 
     await waitFor(() => {
-      // 4 calls: initial /api/diff, /api/revisions, initial /api/comments sync, and refresh /api/diff
-      expect(mockGlobalFetch).toHaveBeenCalledTimes(4);
+      const diffCalls = mockGlobalFetch.mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/diff'),
+      );
+      expect(diffCalls).toHaveLength(2);
     });
 
     await waitFor(() => {
@@ -888,6 +918,8 @@ describe('App Component - Merge-base selection', () => {
 
     vi.mocked(global.fetch).mockImplementation((input) => {
       const url = String(input);
+      const reviewResponse = mockReviewResponse(url);
+      if (reviewResponse) return Promise.resolve(reviewResponse);
 
       if (url.includes('/api/revisions')) {
         return Promise.resolve({
@@ -937,7 +969,7 @@ describe('App Component - Merge-base selection', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('uses resolved revisions for persisted diff state identity', async () => {
+  it('uses stable review identity for comment storage and resolved revisions for viewed state', async () => {
     const response: DiffResponse = {
       ...mockDiffResponse,
       baseCommitish: '1234567',
@@ -956,7 +988,7 @@ describe('App Component - Merge-base selection', () => {
         '98664e1',
         'abc123',
         undefined,
-        undefined,
+        'repository-fixture/review-fixture',
         undefined,
       );
     });
@@ -967,7 +999,7 @@ describe('App Component - Merge-base selection', () => {
       'abc123',
       undefined,
       response.files,
-      undefined,
+      'repository-fixture/review-fixture',
       [],
       undefined,
     );
@@ -1001,6 +1033,8 @@ describe('App Component - Merge-base selection', () => {
 
     vi.mocked(global.fetch).mockImplementation((input) => {
       const url = String(input);
+      const reviewResponse = mockReviewResponse(url);
+      if (reviewResponse) return Promise.resolve(reviewResponse);
 
       if (url.includes('/api/revisions')) {
         return new Promise<Response>((resolve) => {
@@ -1069,6 +1103,8 @@ describe('App Component - Revision-aware refetching', () => {
     vi.mocked(global.fetch).mockImplementation((input: string | URL | Request) => {
       const url =
         typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const reviewResponse = mockReviewResponse(url);
+      if (reviewResponse) return Promise.resolve(reviewResponse);
 
       if (url.includes('/api/revisions')) {
         return Promise.resolve({

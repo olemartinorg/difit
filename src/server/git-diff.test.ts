@@ -1447,10 +1447,10 @@ index abc123..def456 100644
       await expect(parser.getOriginDefaultBranch()).resolves.toBe('origin/develop');
     });
 
-    it('falls back to a common default branch on the remote', async () => {
+    it('keeps the default unknown when only a conventional branch name is present', async () => {
       remote(['refs/remotes/origin/master']);
 
-      await expect(parser.getOriginDefaultBranch()).resolves.toBe('origin/master');
+      await expect(parser.getOriginDefaultBranch()).resolves.toBeNull();
     });
   });
 
