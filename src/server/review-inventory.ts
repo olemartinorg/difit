@@ -45,11 +45,18 @@ export class ReviewInventoryService {
     const distances = new Map(
       await Promise.all(
         [...new Set(observations.flatMap((value) => (value ? [value.mergeBase] : [])))].map(
-          async (mergeBase) =>
-            [
-              mergeBase,
-              Number((await this.git.raw(['rev-list', '--count', `${mergeBase}..${head}`])).trim()),
-            ] as const,
+          async (mergeBase) => {
+            try {
+              return [
+                mergeBase,
+                Number(
+                  (await this.git.raw(['rev-list', '--count', `${mergeBase}..${head}`])).trim(),
+                ),
+              ] as const;
+            } catch {
+              return [mergeBase, undefined] as const;
+            }
+          },
         ),
       ),
     );
