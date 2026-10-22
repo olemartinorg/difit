@@ -43,11 +43,15 @@ export function registerReviewStore(
     const base =
       selection?.baseCommitish ??
       (typeof request.query.base === 'string' ? request.query.base : undefined);
+    const format = (await git.raw(['rev-parse', '--show-object-format'])).trim();
+    const emptyTree = createHash(format).update('tree 0\0').digest('hex');
     let baseHead =
       base && !['.', 'working', 'staged'].includes(base)
-        ? (await git.revparse([`${base}^{commit}`])).trim()
+        ? base === emptyTree
+          ? emptyTree
+          : (await git.revparse([`${base}^{commit}`])).trim()
         : undefined;
-    if (baseHead && selection?.baseMode === 'merge-base')
+    if (baseHead && baseHead !== emptyTree && selection?.baseMode === 'merge-base')
       baseHead = (await git.raw(['merge-base', head, baseHead])).trim();
     const unpublished = await git
       .raw(['rev-list', '--count', `${branch}@{upstream}..${head}`])
