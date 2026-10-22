@@ -96,18 +96,24 @@ export class ReviewStore {
   async resolve(repoPath: string, subject: ReviewSubject): Promise<ReviewRecord> {
     const git = simpleGit(repoPath);
     const head = (await git.revparse([`${subject.head}^{commit}`])).trim();
-    for (const review of this.state.reviews) {
-      if (
-        review.subject.branch !== subject.branch &&
-        (!subject.pullRequest || review.subject.pullRequest?.url !== subject.pullRequest.url)
-      )
-        continue;
-      const common = await git.raw(['merge-base', review.anchor, head]).then(
-        (value) => value.trim(),
-        () => '',
-      );
-      const related = review.anchor === head || common === review.anchor || common === head;
-      if (!related) continue;
+    const pullRequest = subject.pullRequest?.url;
+    const authoritative = pullRequest
+      ? this.state.reviews.find((review) => review.subject.pullRequest?.url === pullRequest)
+      : undefined;
+    const candidates = authoritative ? [authoritative] : this.state.reviews;
+    for (const review of candidates) {
+      // A PR remains the same change after a rebase or force-push. A branch name
+      // cannot bridge two known PR identities, even when their commits descend.
+      if (review !== authoritative) {
+        if (review.subject.branch !== subject.branch) continue;
+        if (pullRequest && review.subject.pullRequest?.url) continue;
+        const common = await git.raw(['merge-base', review.anchor, head]).then(
+          (value) => value.trim(),
+          () => '',
+        );
+        const related = review.anchor === head || common === review.anchor || common === head;
+        if (!related) continue;
+      }
       this.write((state) => {
         const current = state.reviews.find((value) => value.id === review.id);
         if (!current) throw new Error('Unknown review');
