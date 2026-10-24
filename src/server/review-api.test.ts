@@ -161,6 +161,27 @@ describe('scoped review target API', () => {
     expect(readFileSync(join(root, '.git', 'index'))).toEqual(index);
   });
 
+  it('fences a checkout change during native inventory reads', async () => {
+    const f = await fixture();
+    git('checkout', '-q', 'feature');
+    const subject = { ...f.subject, checkout: { branch: 'feature', head: f.head } };
+    const context = new URLSearchParams({
+      reviewBranch: 'feature',
+      reviewSubject: JSON.stringify(subject),
+    });
+    const original = f.parser.getReviewStats.bind(f.parser);
+    vi.spyOn(f.parser, 'getReviewStats').mockImplementationOnce(async (...args) => {
+      const stats = await original(...args);
+      git('checkout', '-q', 'trunk');
+      return stats;
+    });
+    const response = await fetch(`${f.origin}/api/review?${context}`);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining('checkout changed'),
+    });
+  });
+
   it('changes compared OIDs and parsed files, validates against pinned head, and remembers the branch correction', async () => {
     const f = await fixture();
     // Remote-only PRs retain the captured head without a same-name local branch.
@@ -174,7 +195,8 @@ describe('scoped review target API', () => {
     expect(response.status).toBe(200);
     expect(f.changed).toHaveBeenCalledTimes(1);
     expect((await readUserConfig()).client.reviewTargets).toEqual({
-      [`${repositoryId}:feature`]: 'stacked-parent',
+      [`${repositoryId}:feature::${f.head}:https://github.com/fixture/repo/pull/17:${f.declaredBase}`]:
+        'stacked-parent',
     });
     const corrected = await f.inventory();
     expect(corrected).toMatchObject({

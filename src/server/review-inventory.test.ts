@@ -31,6 +31,46 @@ describe('arbitrary branch review inventory', () => {
     return git('rev-parse', 'HEAD');
   };
 
+  it('includes published PR commits and staged, unstaged and untracked edits without changing the checkout or index', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature');
+    const head = commit('published');
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('update-ref', 'refs/remotes/origin/feature', head);
+    git('config', 'branch.feature.remote', 'origin');
+    git('config', 'branch.feature.merge', 'refs/heads/feature');
+    writeFileSync(join(root, 'file'), 'staged\n');
+    git('add', 'file');
+    writeFileSync(join(root, 'file'), 'unstaged\n');
+    writeFileSync(join(root, 'untracked'), 'new\n');
+    const index = readFileSync(join(root, '.git', 'index')),
+      status = git('status', '--porcelain=v1');
+    const inventory = await new ReviewInventoryService(root).getInventory(
+      'trunk',
+      false,
+      'feature',
+      head,
+      true,
+      true,
+    );
+    expect(inventory.commits).toEqual([expect.objectContaining({ hash: head, pushed: true })]);
+    expect(inventory.uncommitted).toMatchObject({ files: 2, additions: 2, deletions: 1 });
+    expect(inventory.defaultSelection).toEqual({
+      baseCommitish: base,
+      targetCommitish: '.',
+      includeUntracked: true,
+    });
+    expect(git('status', '--porcelain=v1')).toBe(status);
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(index);
+    expect(git('rev-parse', 'HEAD')).toBe(head);
+  });
+
+  it('rejects an explicitly unavailable comparison instead of selecting a guessed target', async () => {
+    await expect(
+      new ReviewInventoryService(root).getInventory('missing-target', false, 'trunk'),
+    ).rejects.toThrow('Comparison target is unavailable');
+  });
+
   it('reviews a pinned non-current branch without moving HEAD, changing the index, or including current edits', async () => {
     git('checkout', '-qb', 'feature');
     const featureHead = commit('feature');

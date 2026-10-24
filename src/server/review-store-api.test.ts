@@ -220,6 +220,43 @@ describe('native review persistence API', () => {
     expect(JSON.stringify(retrieved)).not.toContain('private');
     expect((await fetch(`${f.origin}/api/reviews/submitted/missing`)).status).toBe(404);
   });
+
+  it('rejects a stale checkout submission even when the body removes the checkout fence, while accepting pending notes', async () => {
+    const f = await fixture();
+    const subject = { ...f.review.subject, checkout: { branch: 'trunk', head: f.head } };
+    git('checkout', '-qb', 'different-branch');
+    await expect(
+      f.api.capture(
+        {
+          query: { reviewId: f.review.id, reviewSubject: JSON.stringify(subject) },
+        } as unknown as Request,
+        {
+          id: crypto.randomUUID(),
+          submittedAt: '2026-10-24T00:00:00Z',
+          repositoryId: 'repo',
+          subject: f.review.subject,
+          selection: { baseCommitish: f.head, targetCommitish: '.' },
+          resolvedSelection: { baseCommitish: f.head, targetCommitish: '.' },
+          commit: f.head,
+          diffHash: 'diff',
+          ignoreWhitespace: false,
+          threads: [],
+          text: 'Pending feedback',
+        },
+      ),
+    ).rejects.toThrow('checkout changed');
+    expect(
+      (
+        await f.post({
+          operations: [
+            { kind: 'form', id: 'pending', value: { body: 'Keep this draft', context: {} } },
+          ],
+        })
+      ).status,
+    ).toBe(200);
+    expect(f.store.get(f.review.id).forms.pending?.body).toBe('Keep this draft');
+    expect(f.store.submitted()).toEqual([]);
+  });
   it('hands the captured body review ID and subject through to an immutable introduced snapshot', async () => {
     const f = await fixture();
     git('commit', '--allow-empty', '-qm', 'new branch revision');
