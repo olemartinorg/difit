@@ -1,3 +1,4 @@
+import { assertReviewCheckout } from './review-identity.js';
 import type { Express } from 'express';
 
 import type { DiffSelection } from '../types/diff.js';
@@ -11,7 +12,7 @@ export class ReviewApi {
   private readonly inventory;
 
   constructor(
-    repositoryPath: string,
+    private readonly repositoryPath: string,
     private readonly repositoryId: string,
     private readonly parser: ReviewDiffParser,
     private readonly reviewByDefault: boolean,
@@ -29,15 +30,20 @@ export class ReviewApi {
   ) {
     const config = await readUserConfig();
     const targets = config.client.reviewTargets as Record<string, string> | undefined;
-    const savedTarget = targets?.[`${this.repositoryId}:${reviewedBranch ?? 'HEAD'}`];
+    const contextKey = `${this.repositoryId}:${reviewedBranch ?? 'HEAD'}${subject?.pullRequest ? `:${subject.sourceRepository ?? ''}:${subject.head}:${subject.pullRequest.url}:${subject.pullRequest.baseHead ?? subject.pullRequest.base}` : ''}`;
+    const savedTarget = targets?.[contextKey];
     const capturedBase = subject?.pullRequest?.baseHead ?? subject?.baseHead ?? subject?.base;
     const selectedTarget = target ?? savedTarget ?? capturedBase;
+    await assertReviewCheckout(this.repositoryPath, subject);
     const inventory = await this.inventory.getInventory(
       selectedTarget,
       ignoreWhitespace,
       reviewedBranch,
       subject?.head,
+      Boolean(subject?.checkout),
+      Boolean(subject?.pullRequest) || !subject?.checkout,
     );
+    await assertReviewCheckout(this.repositoryPath, subject);
     if (selectedTarget && inventory.target === selectedTarget) {
       inventory.baseSuggestion = {
         ref: selectedTarget,
@@ -114,13 +120,19 @@ export class ReviewApi {
           false,
           branch,
           subject?.head,
+          Boolean(subject?.checkout),
+          Boolean(subject?.pullRequest) || !subject?.checkout,
         );
         if (inventory.target !== body.target)
           throw new Error(`Target branch does not exist: ${body.target}`);
         const config = await readUserConfig();
         const targets = config.client.reviewTargets as Record<string, string> | undefined;
         await updateUserClientSettings({
-          reviewTargets: { ...targets, [`${this.repositoryId}:${branch ?? 'HEAD'}`]: body.target },
+          reviewTargets: {
+            ...targets,
+            [`${this.repositoryId}:${branch ?? 'HEAD'}${subject?.pullRequest ? `:${subject.sourceRepository ?? ''}:${subject.head}:${subject.pullRequest.url}:${subject.pullRequest.baseHead ?? subject.pullRequest.base}` : ''}`]:
+              body.target,
+          },
         });
         onTargetChange();
         res.json({ ok: true });

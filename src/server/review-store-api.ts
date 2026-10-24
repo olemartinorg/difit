@@ -1,3 +1,4 @@
+import { assertReviewCheckout } from './review-identity.js';
 import { reviewIntroduction } from '../utils/reviewIntroduction.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Express, Request } from 'express';
@@ -209,7 +210,15 @@ export function registerReviewStore(
     resolve,
     capture: async (request: Request, body: ReviewSubmission) => {
       const review = await resolve(request);
-      const subject = body.subject ?? review.subject;
+      const captured =
+        typeof request.query.reviewSubject === 'string'
+          ? (JSON.parse(request.query.reviewSubject) as ReviewSubject)
+          : review.subject;
+      const subject = { ...(body.subject ?? review.subject) };
+      delete subject.checkout;
+      if (captured.checkout) subject.checkout = captured.checkout;
+      if (captured.checkout && subject.head !== captured.head)
+        throw new Error('Submitted review checkout changed');
       if (
         subject.repository !== review.subject.repository ||
         subject.branch !== review.subject.branch ||
@@ -218,6 +227,7 @@ export function registerReviewStore(
       )
         throw new Error('Submitted review identity changed');
       await simpleGit(options.repoPath).revparse([`${subject.head}^{commit}`]);
+      await assertReviewCheckout(options.repoPath, subject);
       const introduction = reviewIntroduction(
         subject,
         body.resolvedSelection.baseCommitish,

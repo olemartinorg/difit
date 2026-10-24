@@ -92,6 +92,8 @@ export class ReviewInventoryService {
     ignoreWhitespace = false,
     reviewedBranch?: string,
     reviewedHead?: string,
+    checkout = false,
+    includePublished = !checkout,
   ): Promise<ReviewInventory> {
     const [head, branch, refs, remotes, format] = await Promise.all([
       this.git.revparse([
@@ -144,6 +146,10 @@ export class ReviewInventoryService {
       candidate &&
       (targetOptions.some((option) => option.name === candidate) ||
         /^[a-f0-9]{40,64}$/.test(candidate));
+    if (targetOverride && !validTarget(targetOverride))
+      throw new Error(
+        `Comparison target is unavailable: ${targetOverride}. Fetch missing history and retry.`,
+      );
     const selectedTarget = [targetOverride, explicitBase].find(validTarget);
     const baseSuggestion = selectedTarget
       ? {
@@ -233,7 +239,7 @@ export class ReviewInventoryService {
             '--',
           ])
         : this.git.raw(['rev-list', head, ...(targetHash ? ['--not', targetHash] : []), '--']),
-      reviewedBranch
+      reviewedBranch && !checkout
         ? Promise.resolve({ additions: 0, deletions: 0, files: 0, binaryFiles: 0 })
         : this.parser.getReviewStats(
             {
@@ -243,7 +249,7 @@ export class ReviewInventoryService {
             },
             ignoreWhitespace,
           ),
-      reviewedBranch
+      reviewedBranch && !checkout
         ? Promise.resolve({ additions: 0, deletions: 0, files: 0, binaryFiles: 0 })
         : this.parser.getReviewStats(
             { baseCommitish: head, targetCommitish: 'staged' },
@@ -266,6 +272,8 @@ export class ReviewInventoryService {
       },
     );
     const inventory: ReviewInventory = {
+      checkout,
+      includePublished,
       repositoryId: createHash('sha256').update(resolve(this.repoPath)).digest('hex'),
       branch: branchName,
       reviewedBranch,

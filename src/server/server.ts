@@ -1,3 +1,5 @@
+import { assertReviewCheckout } from './review-identity.js';
+import type { ReviewSubject } from '../types/reviewSubmission.js';
 import { ReviewStore } from './review-store.js';
 import { registerReviewStore } from './review-store-api.js';
 import { getUserConfigPath } from './user-config.js';
@@ -143,6 +145,37 @@ export async function startServer(
   app.use('/api/review-handoff', express.json({ limit: '2mb' }));
   app.use(express.json());
   app.use(express.text()); // For sendBeacon text/plain requests
+  // Comment/form saves remain available after checkout changes. Only new code
+  // reads and submission are fenced, so pending notes can still reach disk.
+  app.use('/api', async (req, res, next) => {
+    const guarded =
+      /^\/(?:diff(?:\/|$)|review(?:\/(?:target|stats))?$|blob\/|line-count\/|generated-status\/|revisions(?:\/|$))/.test(
+        req.path,
+      );
+    if (!guarded || typeof req.query.reviewSubject !== 'string') {
+      next();
+      return;
+    }
+    try {
+      const subject = JSON.parse(req.query.reviewSubject) as ReviewSubject;
+      await assertReviewCheckout(repositoryPath, subject);
+      const send = res.send.bind(res);
+      res.send = (body) => {
+        if (res.statusCode >= 400) return send(body);
+        void assertReviewCheckout(repositoryPath, subject).then(
+          () => send(body),
+          (error) => {
+            res.status(409);
+            send(JSON.stringify({ error: String(error) }));
+          },
+        );
+        return res;
+      };
+      next();
+    } catch (error) {
+      res.status(409).json({ error: String(error) });
+    }
+  });
 
   app.use((_req, res, next) => {
     res.header('Access-Control-Allow-Origin', 'http://localhost:*');

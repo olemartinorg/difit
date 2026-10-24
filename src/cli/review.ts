@@ -135,23 +135,27 @@ export function createReviewCommand(): Command {
     .option('--branch <name>', 'reviewed branch name')
     .option('--head <oid>', 'immutable reviewed commit')
     .option('--base <ref>', 'explicit comparison base')
-    .action(async (options: { branch?: string; head?: string; base?: string }) => {
-      try {
-        console.log(
-          JSON.stringify(
-            await new ReviewInventoryService(process.cwd()).getInventory(
-              options.base,
-              false,
-              options.branch,
-              options.head,
+    .option('--checkout', 'include edits from the admitted current checkout')
+    .action(
+      async (options: { branch?: string; head?: string; base?: string; checkout?: boolean }) => {
+        try {
+          console.log(
+            JSON.stringify(
+              await new ReviewInventoryService(process.cwd()).getInventory(
+                options.base,
+                false,
+                options.branch,
+                options.head,
+                options.checkout,
+              ),
             ),
-          ),
-        );
-      } catch (error) {
-        console.error(String(error));
-        process.exitCode = 1;
-      }
-    });
+          );
+        } catch (error) {
+          console.error(String(error));
+          process.exitCode = 1;
+        }
+      },
+    );
   review
     .command('wait')
     .description('Wait for Pass review to agent, write one review to stdout, and exit')

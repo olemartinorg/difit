@@ -21,6 +21,8 @@ export interface ReviewTarget {
 }
 
 export interface ReviewInventory {
+  checkout?: boolean;
+  includePublished?: boolean;
   repositoryId: string;
   branch: string;
   reviewedBranch?: string;
