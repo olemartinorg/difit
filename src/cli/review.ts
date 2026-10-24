@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { migrateBranchReviews } from '../server/review-migration.js';
 import { createConnection } from 'node:net';
 import { ReviewStore } from '../server/review-store.js';
 import { ReviewInventoryService } from '../server/review-inventory.js';
@@ -96,6 +98,37 @@ export function createReviewCommand(): Command {
         }
       },
     );
+  review
+    .command('inspect-branch-record')
+    .description('Read an owned offline branch record, including unresolved historical notes')
+    .argument('<id>', 'review record UUID')
+    .requiredOption('--store <directory>', 'offline review directory')
+    .requiredOption('--owner <identity>', 'exact verified storage owner')
+    .action((id: string, options: { store: string; owner: string }) => {
+      console.log(JSON.stringify(new ReviewStore(options.store, options.owner).get(id)));
+    });
+  review
+    .command('migrate-branch-owners')
+    .description('Convert an offline version 1 store with explicit per-review source assignments')
+    .requiredOption('--store <directory>', 'offline review directory')
+    .requiredOption('--owner <identity>', 'exact verified storage owner')
+    .requiredOption(
+      '--assignments <file>',
+      'JSON object keyed by every review UUID, with a source assignment or null',
+    )
+    .action((options: { store: string; owner: string; assignments: string }) => {
+      console.log(
+        JSON.stringify(
+          migrateBranchReviews(
+            options.store,
+            options.owner,
+            JSON.parse(readFileSync(options.assignments, 'utf8')) as Parameters<
+              typeof migrateBranchReviews
+            >[2],
+          ),
+        ),
+      );
+    });
   review
     .command('inventory')
     .description('Inspect a branch without checkout')
