@@ -155,7 +155,7 @@ describe('host review ownership', () => {
     expect(store.submitted()[0]?.receipt.outcome).toBe('unknown');
     expect(() => store.submit(a.id, snapshot)).toThrow('Submission ID already exists');
   });
-  it('keeps the review when a local branch acquires a PR and separates unrelated reused branches', async () => {
+  it('keeps the same branch review when a PR is linked or its history is replaced', async () => {
     const store = new ReviewStore(join(root, 'store'), 'owner');
     git('checkout', '-qb', 'work');
     writeFileSync(join(root, 'file'), 'one\n');
@@ -177,7 +177,7 @@ describe('host review ownership', () => {
       branch: 'work',
       head: git('rev-parse', 'HEAD'),
     });
-    expect(reused.id).not.toBe(original.id);
+    expect(reused.id).toBe(original.id);
     expect(() => new ReviewStore(join(root, 'store'), 'replacement-owner')).toThrow('owner');
   });
   it('keeps a PR review and its original comment context through a non-ancestral rebase', async () => {
@@ -212,7 +212,7 @@ describe('host review ownership', () => {
     const rebasedHead = git('rev-parse', 'HEAD');
     const reopened = await store.resolve(root, {
       repository: 'repo',
-      branch: 'renamed-work',
+      branch: 'work',
       head: rebasedHead,
       pullRequest: { ...pullRequest, head: rebasedHead },
     });
@@ -222,7 +222,7 @@ describe('host review ownership', () => {
     expect(reopened.threads).toEqual(original.threads);
     expect(reopened.forms).toEqual(original.forms);
   });
-  it('does not attach a new PR to a reused branch after the old PR was fast-forward merged', async () => {
+  it('keeps branch notes when a reused branch receives a replacement PR', async () => {
     const store = new ReviewStore(join(root, 'store'), 'owner');
     git('checkout', '-qb', 'work');
     writeFileSync(join(root, 'file'), 'first feature\n');
@@ -262,8 +262,8 @@ describe('host review ownership', () => {
         base: 'trunk',
       },
     });
-    expect(next.id).not.toBe(review.id);
-    expect(next.threads).toEqual([]);
+    expect(next.id).toBe(review.id);
+    expect(next.threads[0]?.messages[0]?.body).toBe('Old PR feedback');
     expect(restarted.get(review.id).threads[0]?.messages[0]?.body).toBe('Old PR feedback');
   });
   it('recovers the known PR after a local view and a non-ancestral rebase', async () => {
@@ -322,5 +322,47 @@ describe('host review ownership', () => {
     expect(store.get(a.id).threads).toEqual(legacy);
     expect(store.unassigned()).toEqual({});
     expect(new ReviewStore(join(root, 'store'), 'owner').get(a.id).threads).toEqual(legacy);
+  });
+  it('keeps one source branch review through unlink, replacement, unrelated rewritten history and recreation', async () => {
+    const directory = join(root, 'branch-owned');
+    const store = new ReviewStore(directory, 'owner');
+    const subject = {
+      repository: 'repo',
+      sourceRepository: 'fork/repo',
+      branch: 'trunk',
+      head: git('rev-parse', 'HEAD'),
+    };
+    const original = await store.resolve(root, subject);
+    store.patch(original.id, [{ kind: 'form', id: 'draft', value: { body: 'keep', context: {} } }]);
+    const linked = {
+      ...subject,
+      pullRequest: {
+        number: 1,
+        url: 'https://github.com/base/repo/pull/1',
+        head: subject.head,
+        base: 'main',
+      },
+    };
+    expect((await store.resolve(root, linked)).id).toBe(original.id);
+    git('checkout', '--orphan', 'fresh');
+    writeFileSync(join(root, 'file'), 'unrelated\n');
+    git('add', 'file');
+    git('commit', '-qm', 'rewritten');
+    const rewritten = { ...subject, head: git('rev-parse', 'HEAD') };
+    expect((await new ReviewStore(directory, 'owner').resolve(root, rewritten)).id).toBe(
+      original.id,
+    );
+    const replaced = await store.resolve(root, {
+      ...rewritten,
+      pullRequest: { ...linked.pullRequest, number: 2, url: 'https://github.com/base/repo/pull/2' },
+    });
+    expect(replaced.id).toBe(original.id);
+    expect(replaced.forms.draft?.body).toBe('keep');
+    expect(
+      (await store.resolve(root, { ...rewritten, sourceRepository: 'other-fork/repo' })).id,
+    ).not.toBe(original.id);
+    expect((await store.resolve(root, { ...rewritten, branch: 'different' })).id).not.toBe(
+      original.id,
+    );
   });
 });
