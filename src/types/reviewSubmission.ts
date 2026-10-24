@@ -2,6 +2,8 @@ import type { DiffCommentThread, DiffSelection } from './diff';
 
 export interface ReviewSubject {
   repository: string;
+  sourceRepository?: string;
+  checkout?: { branch: string; head: string };
   branch: string;
   head: string;
   base?: string;

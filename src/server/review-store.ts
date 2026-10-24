@@ -1,3 +1,4 @@
+import { branchSource } from './review-identity.js';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -21,7 +22,7 @@ import type {
 
 export interface ReviewRecord {
   id: string;
-  /** Logical PR binding survives local views that replace the current subject. */
+  /** Historical PR context. Branch source and name own the logical review. */
   pullRequestUrl?: string;
   subject: ReviewSubject;
   anchor: string;
@@ -32,7 +33,7 @@ export interface ReviewRecord {
   appliedWriteIds: string[];
 }
 interface ReviewFile {
-  version: 1;
+  version: 2;
   owner: string;
   reviews: ReviewRecord[];
   unassigned: Record<string, DiffCommentThread[]>;
@@ -48,9 +49,9 @@ export class ReviewStore {
     this.path = join(directory, 'reviews.json');
     this.state = existsSync(this.path)
       ? (JSON.parse(readFileSync(this.path, 'utf8')) as ReviewFile)
-      : { version: 1, owner, reviews: [], unassigned: {}, assignedImports: {}, receipts: {} };
+      : { version: 2, owner, reviews: [], unassigned: {}, assignedImports: {}, receipts: {} };
     if (
-      this.state.version !== 1 ||
+      this.state.version !== 2 ||
       this.state.owner !== owner ||
       !Array.isArray(this.state.reviews)
     )
@@ -85,36 +86,31 @@ export class ReviewStore {
   async resolve(repoPath: string, subject: ReviewSubject): Promise<ReviewRecord> {
     const git = simpleGit(repoPath);
     const head = (await git.revparse([`${subject.head}^{commit}`])).trim();
-    const pullRequest = subject.pullRequest?.url;
-    const authoritative = pullRequest
-      ? this.state.reviews.find((review) => review.pullRequestUrl === pullRequest)
-      : undefined;
-    const candidates = authoritative ? [authoritative] : this.state.reviews;
-    for (const review of candidates) {
-      // A PR remains the same change after a rebase or force-push. A branch name
-      // cannot bridge two known PR identities, even when their commits descend.
-      if (review !== authoritative) {
-        if (review.subject.branch !== subject.branch) continue;
-        if (pullRequest && review.pullRequestUrl) continue;
-        const common = await git.raw(['merge-base', review.anchor, head]).then(
-          (value) => value.trim(),
-          () => '',
-        );
-        const related = review.anchor === head || common === review.anchor || common === head;
-        if (!related) continue;
-      }
+    const sourceRepository =
+      subject.sourceRepository ?? (await branchSource(repoPath, subject.repository));
+    const matches = this.state.reviews.filter(
+      (review) =>
+        review.subject.sourceRepository === sourceRepository &&
+        review.subject.branch === subject.branch,
+    );
+    if (matches.length > 1)
+      throw new Error(
+        'Ambiguous historical branch reviews require explicit reconciliation; all records have been kept.',
+      );
+    const existing = matches[0];
+    if (existing) {
       this.write((state) => {
-        const current = state.reviews.find((value) => value.id === review.id);
+        const current = state.reviews.find((review) => review.id === existing.id);
         if (!current) throw new Error('Unknown review');
-        if (pullRequest) current.pullRequestUrl = pullRequest;
-        current.subject = { ...subject, head };
+        current.subject = { ...subject, sourceRepository, head };
       });
-      return this.get(review.id);
+      return this.get(existing.id);
     }
+    const pullRequest = subject.pullRequest?.url;
     const review: ReviewRecord = {
       id: randomUUID(),
       ...(pullRequest ? { pullRequestUrl: pullRequest } : {}),
-      subject: { ...subject, head },
+      subject: { ...subject, sourceRepository, head },
       anchor: head,
       version: 0,
       threads: [],

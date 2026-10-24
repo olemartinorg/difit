@@ -212,8 +212,8 @@ export function registerReviewStore(
       const subject = body.subject ?? review.subject;
       if (
         subject.repository !== review.subject.repository ||
-        (subject.branch !== review.subject.branch &&
-          subject.pullRequest?.url !== review.subject.pullRequest?.url) ||
+        subject.branch !== review.subject.branch ||
+        subject.sourceRepository !== review.subject.sourceRepository ||
         !/^[a-f0-9]{40,64}$/.test(subject.head)
       )
         throw new Error('Submitted review identity changed');
