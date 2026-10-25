@@ -29,6 +29,58 @@ describe('host review ownership', () => {
     position: { side: 'new', line: 1 },
     messages: [{ id, body, createdAt: '2026-10-22T00:00:00Z', updatedAt: '2026-10-22T00:00:00Z' }],
   });
+  it('counts pending messages by branch and source across delivery, edits and restart', async () => {
+    const directory = join(root, 'store');
+    const store = new ReviewStore(directory, 'owner');
+    const review = await store.resolve(root, {
+      repository: 'repo',
+      sourceRepository: 'owner/repo',
+      branch: 'trunk',
+      head: git('rev-parse', 'HEAD'),
+    });
+    const other = await store.resolve(root, {
+      repository: 'repo',
+      sourceRepository: 'fork/repo',
+      branch: 'trunk',
+      head: review.anchor,
+    });
+    store.patch(review.id, [{ kind: 'thread', id: 'one', value: thread('one', 'original') }]);
+    store.patch(other.id, [{ kind: 'thread', id: 'other', value: thread('other', 'fork note') }]);
+    const snapshot: ReviewSubmission = {
+      id: 'submission',
+      submittedAt: '2026-10-22T00:00:00Z',
+      repositoryId: 'repo',
+      selection: { baseCommitish: review.anchor, targetCommitish: review.anchor },
+      resolvedSelection: { baseCommitish: review.anchor, targetCommitish: review.anchor },
+      commit: review.anchor,
+      diffHash: 'hash',
+      ignoreWhitespace: false,
+      threads: store.get(review.id).threads,
+      text: 'feedback',
+    };
+    store.submit(review.id, snapshot);
+    for (const outcome of ['submitted', 'failed', 'unknown'] as const) {
+      store.receipt(snapshot.id, { outcome });
+      expect(store.pendingComments()[0]?.commentCount).toBe(1);
+    }
+    store.receipt(snapshot.id, { outcome: 'accepted' });
+    expect(store.pendingComments()[0]?.commentCount).toBe(0);
+    store.patch(review.id, [
+      { kind: 'message', id: 'one', threadId: 'one', value: thread('one', 'edited').messages[0] },
+      {
+        kind: 'message',
+        id: 'reply',
+        threadId: 'one',
+        value: thread('reply', 'reply').messages[0],
+      },
+    ]);
+    expect(new ReviewStore(directory, 'owner').pendingComments()).toEqual([
+      { sourceRepository: 'owner/repo', branch: 'trunk', commentCount: 2 },
+      { sourceRepository: 'fork/repo', branch: 'trunk', commentCount: 1 },
+    ]);
+    store.patch(review.id, [{ kind: 'thread', id: 'one', value: null }]);
+    expect(store.pendingComments()[0]?.commentCount).toBe(0);
+  });
   it('restores A/B/A forms, edits and replies after process restart without leaking reviews', async () => {
     const path = join(root, 'store');
     const store = new ReviewStore(path, 'owner');

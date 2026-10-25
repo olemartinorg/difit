@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ReviewDiffParser } from './review-diff.js';
 import { ReviewInventoryService } from './review-inventory.js';
 
 describe('arbitrary branch review inventory', () => {
@@ -31,6 +32,22 @@ describe('arbitrary branch review inventory', () => {
     return git('rev-parse', 'HEAD');
   };
 
+  it('resolves the captured comparison without reading diffs or commit statistics', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature');
+    const head = commit('feature');
+    const parser = new ReviewDiffParser(root);
+    const stats = vi
+      .spyOn(parser, 'getReviewStats')
+      .mockRejectedValue(new Error('Unnecessary diff read'));
+    const comparison = await new ReviewInventoryService(root, parser).getComparison(
+      'trunk',
+      'feature',
+      head,
+    );
+    expect(comparison).toMatchObject({ head, branchBase: base, target: 'trunk' });
+    expect(stats).not.toHaveBeenCalled();
+  });
   it('includes published PR commits and staged, unstaged and untracked edits without changing the checkout or index', async () => {
     const base = git('rev-parse', 'HEAD');
     git('checkout', '-qb', 'feature');
