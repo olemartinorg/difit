@@ -87,14 +87,7 @@ export class ReviewInventoryService {
     };
   }
 
-  async getInventory(
-    targetOverride?: string,
-    ignoreWhitespace = false,
-    reviewedBranch?: string,
-    reviewedHead?: string,
-    checkout = false,
-    includePublished = !checkout,
-  ): Promise<ReviewInventory> {
+  async getComparison(targetOverride?: string, reviewedBranch?: string, reviewedHead?: string) {
     const [head, branch, refs, remotes, format] = await Promise.all([
       this.git.revparse([
         reviewedHead
@@ -182,6 +175,38 @@ export class ReviewInventoryService {
         'No shared ancestry is available. Fetch missing history or choose a related comparison base.',
       );
     const branchBase = commonBase || emptyTree;
+    return {
+      head: head.trim(),
+      branchName,
+      target,
+      targetHash: targetHash?.trim(),
+      branchBase,
+      targetOptions,
+      baseSuggestion,
+      remotes,
+      emptyTree,
+    };
+  }
+
+  async getInventory(
+    targetOverride?: string,
+    ignoreWhitespace = false,
+    reviewedBranch?: string,
+    reviewedHead?: string,
+    checkout = false,
+    includePublished = !checkout,
+  ): Promise<ReviewInventory> {
+    const {
+      head,
+      branchName,
+      target,
+      targetHash,
+      branchBase,
+      targetOptions,
+      baseSuggestion,
+      remotes,
+      emptyTree,
+    } = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
     const pushRemote = await this.git
       .raw(['config', '--get', `branch.${branchName}.pushRemote`])
       .catch(() => '');

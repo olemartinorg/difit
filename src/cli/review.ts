@@ -144,18 +144,34 @@ export function createReviewCommand(): Command {
     .option('--head <oid>', 'immutable reviewed commit')
     .option('--base <ref>', 'explicit comparison base')
     .option('--checkout', 'include edits from the admitted current checkout')
+    .option(
+      '--comparison-only',
+      'resolve the comparison without reading diffs or commit statistics',
+    )
     .action(
-      async (options: { branch?: string; head?: string; base?: string; checkout?: boolean }) => {
+      async (options: {
+        branch?: string;
+        head?: string;
+        base?: string;
+        checkout?: boolean;
+        comparisonOnly?: boolean;
+      }) => {
         try {
           console.log(
             JSON.stringify(
-              await new ReviewInventoryService(process.cwd()).getInventory(
-                options.base,
-                false,
-                options.branch,
-                options.head,
-                options.checkout,
-              ),
+              options.comparisonOnly
+                ? await new ReviewInventoryService(process.cwd()).getComparison(
+                    options.base,
+                    options.branch,
+                    options.head,
+                  )
+                : await new ReviewInventoryService(process.cwd()).getInventory(
+                    options.base,
+                    false,
+                    options.branch,
+                    options.head,
+                    options.checkout,
+                  ),
             ),
           );
         } catch (error) {
