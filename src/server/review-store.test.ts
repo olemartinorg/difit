@@ -64,7 +64,9 @@ describe('host review ownership', () => {
       expect(store.pendingComments()[0]?.commentCount).toBe(1);
     }
     store.receipt(snapshot.id, { outcome: 'accepted' });
-    expect(store.pendingComments()[0]?.commentCount).toBe(0);
+    expect(store.pendingComments()).toEqual([
+      { sourceRepository: 'fork/repo', branch: 'trunk', commentCount: 1 },
+    ]);
     store.patch(review.id, [
       { kind: 'message', id: 'one', threadId: 'one', value: thread('one', 'edited').messages[0] },
       {
@@ -79,7 +81,9 @@ describe('host review ownership', () => {
       { sourceRepository: 'fork/repo', branch: 'trunk', commentCount: 1 },
     ]);
     store.patch(review.id, [{ kind: 'thread', id: 'one', value: null }]);
-    expect(store.pendingComments()[0]?.commentCount).toBe(0);
+    expect(store.pendingComments()).toEqual([
+      { sourceRepository: 'fork/repo', branch: 'trunk', commentCount: 1 },
+    ]);
   });
   it('restores A/B/A forms, edits and replies after process restart without leaking reviews', async () => {
     const path = join(root, 'store');

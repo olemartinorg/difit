@@ -236,7 +236,7 @@ export class ReviewStore {
     });
   }
   pendingComments() {
-    return this.state.reviews.map((review) => {
+    return this.state.reviews.flatMap((review) => {
       const delivered = review.submissions.filter(
         (submission) => this.state.receipts[submission.id]?.outcome === 'accepted',
       );
@@ -258,11 +258,18 @@ export class ReviewStore {
           ).length,
         0,
       );
-      return {
-        sourceRepository: review.subject.sourceRepository,
-        branch: review.subject.branch,
-        commentCount,
-      };
+      if (commentCount === 0) return [];
+      const { sourceRepository, branch } = review.subject;
+      if (
+        typeof sourceRepository !== 'string' ||
+        !sourceRepository.trim() ||
+        typeof branch !== 'string' ||
+        !branch.trim()
+      )
+        throw new Error(
+          `Pending comments in review ${review.id} require a source repository and branch. All saved feedback has been preserved.`,
+        );
+      return [{ sourceRepository, branch, commentCount }];
     });
   }
   submitted(id?: string): SubmittedReview[] {
