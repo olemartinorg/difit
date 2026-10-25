@@ -235,6 +235,36 @@ export class ReviewStore {
       state.receipts[id] = receipt;
     });
   }
+  pendingComments() {
+    return this.state.reviews.map((review) => {
+      const delivered = review.submissions.filter(
+        (submission) => this.state.receipts[submission.id]?.outcome === 'accepted',
+      );
+      const commentCount = review.threads.reduce(
+        (count, thread) =>
+          count +
+          thread.messages.filter(
+            (message) =>
+              message.body.trim() &&
+              !delivered.some((submission) =>
+                submission.threads.some(
+                  (sentThread) =>
+                    sentThread.id === thread.id &&
+                    sentThread.messages.some(
+                      (sent) => sent.id === message.id && sent.body === message.body,
+                    ),
+                ),
+              ),
+          ).length,
+        0,
+      );
+      return {
+        sourceRepository: review.subject.sourceRepository,
+        branch: review.subject.branch,
+        commentCount,
+      };
+    });
+  }
   submitted(id?: string): SubmittedReview[] {
     return this.state.reviews.flatMap((review) =>
       review.submissions

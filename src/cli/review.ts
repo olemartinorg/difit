@@ -99,6 +99,14 @@ export function createReviewCommand(): Command {
       },
     );
   review
+    .command('pending-comments')
+    .description('Count saved branch comments that have not been accepted by an agent')
+    .requiredOption('--store <directory>', 'offline review directory')
+    .requiredOption('--owner <identity>', 'exact verified storage owner')
+    .action((options: { store: string; owner: string }) => {
+      console.log(JSON.stringify(new ReviewStore(options.store, options.owner).pendingComments()));
+    });
+  review
     .command('inspect-branch-record')
     .description('Read an owned offline branch record, including unresolved historical notes')
     .argument('<id>', 'review record UUID')
