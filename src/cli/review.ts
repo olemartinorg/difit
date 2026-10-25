@@ -160,11 +160,14 @@ export function createReviewCommand(): Command {
           console.log(
             JSON.stringify(
               options.comparisonOnly
-                ? await new ReviewInventoryService(process.cwd()).getComparison(
-                    options.base,
-                    options.branch,
-                    options.head,
-                  )
+                ? await new ReviewInventoryService(process.cwd())
+                    .getComparison(options.base, options.branch, options.head)
+                    .then(({ head, branchBase, target, baseSuggestion }) => ({
+                      head,
+                      branchBase,
+                      target,
+                      baseSuggestion,
+                    }))
                 : await new ReviewInventoryService(process.cwd()).getInventory(
                     options.base,
                     false,
