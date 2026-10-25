@@ -92,3 +92,131 @@ it('reads only immutable submissions through the native owner without rewriting 
   expect(process.exitCode).toBe(1);
   expect(readFileSync(store.path)).toEqual(before);
 });
+
+it('counts only pending branch messages while preserving empty reviews and unassigned history', async () => {
+  root = mkdtempSync(join(tmpdir(), 'difit-pending-history-'));
+  const message = {
+    id: 'comment',
+    body: 'Saved feedback',
+    createdAt: '2026-10-22T00:00:00Z',
+    updatedAt: '2026-10-22T00:00:00Z',
+  };
+  const thread = {
+    id: 'thread',
+    filePath: 'file',
+    position: { side: 'new', line: 1 },
+    messages: [message, { ...message, id: 'reply', body: 'Saved reply' }],
+  };
+  const record = {
+    anchor: 'a'.repeat(40),
+    version: 0,
+    threads: [],
+    forms: {},
+    submissions: [],
+    appliedWriteIds: [],
+  };
+  const state = {
+    version: 2,
+    owner: 'captured-owner',
+    reviews: [
+      {
+        ...record,
+        id: 'empty-history',
+        subject: { repository: '/old/repository', branch: '', head: record.anchor },
+      },
+      {
+        ...record,
+        id: 'unfinished-history',
+        subject: { repository: '/old/repository', branch: '', head: record.anchor },
+        forms: { draft: { body: 'Unfinished private draft', context: {} } },
+      },
+      {
+        ...record,
+        id: 'branch-review',
+        subject: {
+          repository: 'repo',
+          sourceRepository: 'owner/repo',
+          branch: 'feature',
+          head: record.anchor,
+        },
+        threads: [thread],
+      },
+      {
+        ...record,
+        id: 'accepted-history',
+        subject: { repository: '/old/repository', branch: '', head: record.anchor },
+        threads: [thread],
+        submissions: [{ id: 'accepted', threads: [thread] }],
+      },
+    ],
+    unassigned: { imported: [thread] },
+    assignedImports: {},
+    receipts: { accepted: { outcome: 'accepted' } },
+  };
+  const path = join(root, 'reviews.json');
+  writeFileSync(path, JSON.stringify(state));
+  const before = readFileSync(path),
+    metadata = statSync(path),
+    names = readdirSync(root);
+  const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  errors.mockClear();
+  await createReviewCommand().parseAsync(
+    ['pending-comments', '--store', root, '--owner', state.owner],
+    { from: 'user' },
+  );
+  expect(JSON.parse(String(output.mock.lastCall?.[0]))).toEqual([
+    { sourceRepository: 'owner/repo', branch: 'feature', commentCount: 2 },
+  ]);
+  expect(errors).not.toHaveBeenCalled();
+  expect(JSON.stringify(output.mock.calls)).not.toMatch(
+    /Saved feedback|Saved reply|Unfinished private draft/,
+  );
+  expect(readFileSync(path)).toEqual(before);
+  expect(statSync(path).mtimeMs).toBe(metadata.mtimeMs);
+  expect(readdirSync(root)).toEqual(names);
+});
+
+it.each([{ branch: 'feature' }, { sourceRepository: 'owner/repo', branch: '' }])(
+  'reports pending feedback without a complete branch identity instead of discarding it: %j',
+  async (identity) => {
+    root = mkdtempSync(join(tmpdir(), 'difit-pending-unassigned-'));
+    const path = join(root, 'reviews.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 2,
+        owner: 'captured-owner',
+        reviews: [
+          {
+            id: 'unassigned-review',
+            subject: { repository: 'repo', ...identity, head: 'a'.repeat(40) },
+            anchor: 'a'.repeat(40),
+            version: 0,
+            threads: [{ id: 'thread', messages: [{ id: 'message', body: 'Keep this feedback' }] }],
+            forms: {},
+            submissions: [],
+            appliedWriteIds: [],
+          },
+        ],
+        unassigned: {},
+        assignedImports: {},
+        receipts: {},
+      }),
+    );
+    const before = readFileSync(path),
+      metadata = statSync(path);
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(
+      createReviewCommand().parseAsync(
+        ['pending-comments', '--store', root, '--owner', 'captured-owner'],
+        { from: 'user' },
+      ),
+    ).rejects.toThrow(
+      'Pending comments in review unassigned-review require a source repository and branch',
+    );
+    expect(output).not.toHaveBeenCalled();
+    expect(readFileSync(path)).toEqual(before);
+    expect(statSync(path).mtimeMs).toBe(metadata.mtimeMs);
+  },
+);
