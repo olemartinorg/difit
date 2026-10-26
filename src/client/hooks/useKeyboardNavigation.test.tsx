@@ -30,6 +30,7 @@ window.scrollTo = vi.fn();
 
 // Helper to create mock elements
 const createMockElement = () => ({
+  closest: vi.fn(() => null),
   scrollIntoView: vi.fn(),
   getBoundingClientRect: vi.fn(() => ({
     top: 100,
@@ -53,6 +54,7 @@ const createMockScrollContainer = () => ({
     height: 768,
   })),
   scrollTop: 0,
+  clientTop: 0,
   scrollHeight: 2000,
   clientHeight: 768,
 });
