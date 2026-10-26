@@ -259,16 +259,16 @@ export class ReviewInventoryService {
     checkout = false,
     publication?: { head: string; source: string },
   ) {
+    const comparison = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
+    const { head, targetHash, branchName, remotes } = comparison;
     const verifyCheckout = async () => {
       if (!checkout) return;
       const current = (await this.git.revparse(['HEAD'])).trim();
       const branch = (await this.git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
-      if (current !== reviewedHead || branch !== reviewedBranch)
+      if (current !== head || branch !== branchName)
         throw new Error('The captured checkout changed while reading branch status');
     };
     await verifyCheckout();
-    const comparison = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
-    const { head, targetHash, branchName, remotes } = comparison;
     const published = await this.getPublication(branchName, remotes, publication);
     const count = async (args: string[]) =>
       Number((await this.git.raw(['rev-list', '--count', ...args, '--'])).trim());
