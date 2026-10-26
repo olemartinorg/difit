@@ -32,6 +32,82 @@ describe('arbitrary branch review inventory', () => {
     return git('rev-parse', 'HEAD');
   };
 
+  it('counts published and local commits from captured PR history without symbolic defaults or exploratory settings', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature');
+    commit('published one');
+    commit('published two');
+    const publication = commit('published three');
+    const head = commit('local');
+    git('remote', 'add', 'unrelated', 'https://github.com/elsewhere/other.git');
+    git('update-ref', 'refs/remotes/unrelated/other', head);
+    writeFileSync(join(root, 'file'), 'dirty\n');
+    writeFileSync(join(root, 'new'), 'untracked\n');
+    const before = readFileSync(join(root, '.git', 'index'));
+    const service = new ReviewInventoryService(root);
+    const summary = await service.getSummary(base, 'feature', head, true, {
+      head: publication,
+      source: 'fork/repo',
+    });
+    expect(summary).toMatchObject({
+      availability: 'available',
+      head,
+      targetHash: base,
+      publicationHead: publication,
+      ahead: 1,
+      pushedAhead: 3,
+      behind: 0,
+      dirty: true,
+      edits: { files: 2 },
+    });
+    expect(
+      await service.getSummary(base, 'feature', head, false, {
+        head: publication,
+        source: 'fork/repo',
+      }),
+    ).toMatchObject({ ahead: 1, pushedAhead: 3, dirty: null, edits: undefined });
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(before);
+  });
+
+  it('keeps full-graph totals through merges and detects a mode-only dirty checkout', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature');
+    const published = commit('published');
+    git('checkout', '-qb', 'side');
+    writeFileSync(join(root, 'side'), 'side\n');
+    git('add', '.');
+    git('commit', '-qm', 'side');
+    git('checkout', '-q', 'feature');
+    commit('local');
+    git('merge', '--no-ff', '-qm', 'merge', 'side');
+    git('update-index', '--chmod=+x', 'file');
+    const summary = await new ReviewInventoryService(root).getSummary(
+      base,
+      'feature',
+      git('rev-parse', 'HEAD'),
+      true,
+      { head: published, source: 'fixture/repo' },
+    );
+    expect(summary).toMatchObject({ ahead: 3, pushedAhead: 1, dirty: true });
+  });
+
+  it('does not read grouped diff statistics for committed-only summaries and rejects missing expected publication history', async () => {
+    git('checkout', '-qb', 'feature');
+    commit('feature');
+    const parser = new ReviewDiffParser(root);
+    const stats = vi
+      .spyOn(parser, 'getReviewStats')
+      .mockRejectedValue(new Error('Unexpected diff read'));
+    await new ReviewInventoryService(root, parser).getSummary('trunk', 'feature');
+    expect(stats).not.toHaveBeenCalled();
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('config', 'branch.feature.remote', 'origin');
+    git('config', 'branch.feature.merge', 'refs/heads/feature');
+    await expect(new ReviewInventoryService(root).getSummary('trunk', 'feature')).rejects.toThrow(
+      'Publication history is unavailable',
+    );
+  });
+
   it('resolves the captured comparison without reading diffs or commit statistics', async () => {
     const base = git('rev-parse', 'HEAD');
     git('checkout', '-qb', 'feature');

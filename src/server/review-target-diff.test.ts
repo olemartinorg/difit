@@ -40,6 +40,7 @@ it('publishes the actual comparison snapshot and files after a scoped review tar
     const subject: ReviewSubject = {
       repository: root,
       branch: 'feature',
+      sourceRepository: 'fixture/repo',
       head,
       base: 'trunk',
       baseHead: base,

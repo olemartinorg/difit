@@ -69,6 +69,7 @@ describe('scoped review target API', () => {
     const subject: ReviewSubject = {
       repository: repositoryId,
       branch: 'feature',
+      sourceRepository: 'fixture/repo',
       head,
       base: 'declared-target',
       baseHead: base,
@@ -195,7 +196,7 @@ describe('scoped review target API', () => {
     expect(response.status).toBe(200);
     expect(f.changed).toHaveBeenCalledTimes(1);
     expect((await readUserConfig()).client.reviewTargets).toEqual({
-      [`${repositoryId}:feature::${f.head}:https://github.com/fixture/repo/pull/17:${f.declaredBase}`]:
+      [`${repositoryId}:feature:fixture/repo:${f.head}:https://github.com/fixture/repo/pull/17:${f.declaredBase}`]:
         'stacked-parent',
     });
     const corrected = await f.inventory();
