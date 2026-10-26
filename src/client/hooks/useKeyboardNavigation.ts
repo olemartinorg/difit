@@ -305,7 +305,7 @@ export function useKeyboardNavigation({
 
   // Set cursor position from external source (e.g., mouse click)
   const setCursorPosition = useCallback(
-    (position: CursorPosition | null) => {
+    (position: CursorPosition | null, alignment: 'start' | 'nearest' = 'nearest') => {
       if (!position) {
         setCursor(null);
         return;
@@ -313,7 +313,7 @@ export function useKeyboardNavigation({
       // Fix the side if necessary
       const fixedPosition = fixSide(position, files);
       setCursor(fixedPosition);
-      scrollToElement(getElementId(fixedPosition, viewMode));
+      scrollToElement(getElementId(fixedPosition, viewMode), alignment);
     },
     [files, viewMode, scrollToElement],
   );

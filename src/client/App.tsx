@@ -804,16 +804,25 @@ function App() {
     [toggleFileReviewed, diffData, rememberFilePosition],
   );
 
+  const deferredCursorScrollRef = useRef<typeof cursor>(null);
   useEffect(() => {
     if (!diffData || !cursor) return;
 
     const filePath = diffData.files[cursor.fileIndex]?.path;
-    if (!filePath || renderedFilePaths.has(filePath)) return;
+    if (!filePath) return;
 
-    ensureFilesRenderedUpTo(filePath);
-    requestAnimationFrame(() => {
-      setCursorPosition(cursor);
-    });
+    if (!renderedFilePaths.has(filePath)) {
+      deferredCursorScrollRef.current = cursor;
+      ensureFilesRenderedUpTo(filePath);
+      return;
+    }
+
+    // Scroll after the deferred rows have committed, when their geometry exists.
+    const pendingCursor = deferredCursorScrollRef.current;
+    deferredCursorScrollRef.current = null;
+    if (pendingCursor === cursor) {
+      setCursorPosition(cursor, 'start');
+    }
   }, [cursor, diffData, ensureFilesRenderedUpTo, renderedFilePaths, setCursorPosition]);
 
   const handleLineClick = useCallback(

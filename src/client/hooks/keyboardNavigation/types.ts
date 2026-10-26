@@ -54,7 +54,7 @@ export interface UseKeyboardNavigationReturn {
   cursor: CursorPosition | null;
   isHelpOpen: boolean;
   setIsHelpOpen: (open: boolean) => void;
-  setCursorPosition: (position: CursorPosition | null) => void;
+  setCursorPosition: (position: CursorPosition | null, alignment?: 'start' | 'nearest') => void;
   rememberFilePosition: (fileIndex: number) => void;
 }
 
