@@ -56,6 +56,35 @@ describe('review inventory selection', () => {
     vi.unstubAllGlobals();
   });
 
+  it('honors default intent on each document even when the reused process started in advanced mode', async () => {
+    const data = { ...inventory(), reviewByDefault: false };
+    vi.mocked(fetch).mockImplementation(() => Promise.resolve(Response.json(data)));
+    window.history.replaceState(null, '', '/?reviewIntent=default');
+    const changed = vi.fn();
+    const first = renderHook(() => useReviewInventory(changed, true, false, false));
+    await waitFor(() => expect(first.result.current.active).toBe(true));
+    expect(first.result.current.range).toEqual({ oldest: parent, newest: head });
+    act(() => first.result.current.useAdvanced());
+    await act(async () => {
+      await first.result.current.refresh();
+    });
+    expect(first.result.current.active).toBe(false);
+    first.unmount();
+    window.history.replaceState(null, '', '/?reviewIntent=default&reviewBranch=other');
+    const second = renderHook(() => useReviewInventory(changed, true, false, false));
+    await waitFor(() => expect(second.result.current.active).toBe(true));
+    expect(second.result.current.range).toEqual({ oldest: parent, newest: head });
+  });
+
+  it('preserves an explicit empty range instead of replacing it with launch defaults', async () => {
+    vi.mocked(fetch).mockResolvedValue(Response.json({ ...inventory(), reviewByDefault: false }));
+    window.history.replaceState(null, '', '/?reviewIntent=default#review=empty');
+    const { result } = renderHook(() => useReviewInventory(vi.fn(), true, false, false));
+    await waitFor(() => expect(result.current.inventory).not.toBeNull());
+    expect(result.current.active).toBe(true);
+    expect(result.current.range).toBeNull();
+  });
+
   it('retains a fully published scoped comparison and changes the resolved base when target changes', async () => {
     const initial = inventory(),
       corrected = inventory('stacked-parent');
@@ -103,7 +132,7 @@ describe('review inventory selection', () => {
       uncommitted: { additions: 1, deletions: 0, files: 1, binaryFiles: 0 },
       defaultSelection: { baseCommitish: head, targetCommitish: '.', includeUntracked: true },
     };
-    vi.mocked(fetch).mockResolvedValue(Response.json(data));
+    vi.mocked(fetch).mockImplementation(() => Promise.resolve(Response.json(data)));
     const changed = vi.fn();
     const { result } = renderHook(() => useReviewInventory(changed, true, false, false));
     await waitFor(() =>
