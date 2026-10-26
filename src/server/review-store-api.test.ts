@@ -117,13 +117,18 @@ describe('native review persistence API', () => {
       baseHead: alternative,
       comparisonHead: f.head,
     });
-    const introduction = reviewIntroduction(
-      record.subject,
-      alternative.slice(0, 7),
-      f.head.slice(0, 7),
-    );
-    expect(introduction).toContain(`Comparison target: ${f.head}`);
-    expect(introduction).toContain(` ${alternative}\n`);
+    expect(reviewIntroduction(record.subject)).toBe('Review for repo, branch trunk\n\n');
+    expect(
+      reviewIntroduction({
+        ...record.subject,
+        pullRequest: {
+          number: 21243,
+          url: 'https://github.com/Altinn/altinn-studio/pull/21243',
+          base: 'main',
+          head: f.head,
+        },
+      }),
+    ).toBe('Review for repo, branch trunk, PR #21243\n\n');
   });
 
   it('rejects whole-collection saves and accepts independent affected-field saves with latest save winning', async () => {
@@ -197,9 +202,7 @@ describe('native review persistence API', () => {
       repositoryId: 'captured-repository',
       subject: { branch: 'trunk', head: f.head },
     });
-    expect(snapshot.text).toContain('trunk');
-    expect(snapshot.text).toContain('No pull request yet');
-    expect(snapshot.text).toContain(f.head);
+    expect(snapshot.text).toBe('Review for repo, branch trunk\n\nCaptured feedback');
     f.store.receipt(snapshot.id, {
       outcome: 'unknown',
       conversationId: 'captured-conversation',
@@ -291,9 +294,7 @@ describe('native review persistence API', () => {
       id: body.id,
     });
     expect(f.captures[0]).toMatchObject({ reviewId: f.review.id, subject });
-    expect(delivered.text).toContain(f.head);
-    expect(delivered.text).toContain('No pull request yet');
-    expect(delivered.text).toContain('Review of captured old revision');
+    expect(delivered.text).toBe('Review for repo, branch trunk\n\nReview of captured old revision');
     expect(
       (await fetch(`${f.origin}/api/review-handoff/${body.id}/ack`, { method: 'POST' })).status,
     ).toBe(200);

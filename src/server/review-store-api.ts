@@ -228,11 +228,7 @@ export function registerReviewStore(
         throw new Error('Submitted review identity changed');
       await simpleGit(options.repoPath).revparse([`${subject.head}^{commit}`]);
       await assertReviewCheckout(options.repoPath, subject);
-      const introduction = reviewIntroduction(
-        subject,
-        body.resolvedSelection.baseCommitish,
-        body.resolvedSelection.targetCommitish,
-      );
+      const introduction = reviewIntroduction(subject);
       const text = body.text.startsWith(introduction) ? body.text : introduction + body.text;
       const snapshot: ReviewSubmission = {
         ...body,

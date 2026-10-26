@@ -64,13 +64,8 @@ export function useReviewExport(options: ReviewExportOptions) {
     const isOrigin = () => currentRef.current.context === context;
     try {
       const text =
-        (diff.reviewSubject
-          ? reviewIntroduction(
-              diff.reviewSubject,
-              resolvedSelection.baseCommitish,
-              resolvedSelection.targetCommitish,
-            )
-          : '') + formatReviewExport(prompt, settings.template);
+        (diff.reviewSubject ? reviewIntroduction(diff.reviewSubject) : '') +
+        formatReviewExport(prompt, settings.template);
       capturingContext = handoff;
       const hostContext = handoff ? captureReviewHandoffContext() : undefined;
       if (handoff) {
