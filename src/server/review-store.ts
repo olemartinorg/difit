@@ -2,7 +2,6 @@ import { branchSource } from './review-identity.js';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
-  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -47,9 +46,19 @@ export class ReviewStore {
   readonly path: string;
   constructor(directory: string, owner: string) {
     this.path = join(directory, 'reviews.json');
-    this.state = existsSync(this.path)
-      ? (JSON.parse(readFileSync(this.path, 'utf8')) as ReviewFile)
-      : { version: 2, owner, reviews: [], unassigned: {}, assignedImports: {}, receipts: {} };
+    try {
+      this.state = JSON.parse(readFileSync(this.path, 'utf8')) as ReviewFile;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      this.state = {
+        version: 2,
+        owner,
+        reviews: [],
+        unassigned: {},
+        assignedImports: {},
+        receipts: {},
+      };
+    }
     if (
       this.state.version !== 2 ||
       this.state.owner !== owner ||
