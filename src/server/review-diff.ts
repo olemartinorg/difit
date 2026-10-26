@@ -17,7 +17,7 @@ export class ReviewDiffParser extends GitDiffParser {
 
   constructor(private readonly reviewPath: string) {
     super(reviewPath);
-    this.reviewGit = simpleGit(reviewPath);
+    this.reviewGit = simpleGit({ baseDir: reviewPath, binary: ['git', '--no-optional-locks'] });
   }
 
   override async parseDiff(

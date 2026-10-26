@@ -36,6 +36,7 @@ export interface ReviewInventory {
   commits: ReviewCommit[];
   uncommitted?: ReviewStats;
   stagedOnly: boolean;
+  stagedAvailable?: boolean;
   localStats?: ReviewStats;
   pushedStats?: ReviewStats;
   defaultSelection: DiffSelection | null;

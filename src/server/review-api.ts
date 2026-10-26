@@ -42,6 +42,9 @@ export class ReviewApi {
       subject?.head,
       Boolean(subject?.checkout),
       Boolean(subject?.pullRequest) || !subject?.checkout,
+      subject?.pullRequest
+        ? { head: subject.pullRequest.head, source: subject.sourceRepository ?? '' }
+        : undefined,
     );
     await assertReviewCheckout(this.repositoryPath, subject);
     if (selectedTarget && inventory.target === selectedTarget) {

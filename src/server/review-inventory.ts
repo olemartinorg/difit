@@ -14,7 +14,11 @@ export class ReviewInventoryService {
     private readonly repoPath: string,
     parser?: ReviewDiffParser,
   ) {
-    this.git = simpleGit({ baseDir: repoPath, maxConcurrentProcesses: 4 });
+    this.git = simpleGit({
+      baseDir: repoPath,
+      maxConcurrentProcesses: 4,
+      binary: ['git', '--no-optional-locks'],
+    });
     this.parser = parser ?? new ReviewDiffParser(repoPath);
   }
 
@@ -188,25 +192,20 @@ export class ReviewInventoryService {
     };
   }
 
-  async getInventory(
-    targetOverride?: string,
-    ignoreWhitespace = false,
-    reviewedBranch?: string,
-    reviewedHead?: string,
-    checkout = false,
-    includePublished = !checkout,
-  ): Promise<ReviewInventory> {
-    const {
-      head,
-      branchName,
-      target,
-      targetHash,
-      branchBase,
-      targetOptions,
-      baseSuggestion,
-      remotes,
-      emptyTree,
-    } = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
+  private async getPublication(
+    branchName: string,
+    remotes: Array<{ name: string }>,
+    publication?: { head: string; source: string },
+  ) {
+    if (publication) {
+      if (!publication.source || !/^[a-f0-9]{40,64}$/.test(publication.head))
+        throw new Error('Verified publication identity is invalid');
+      return {
+        publicationHead: (await this.git.revparse([`${publication.head}^{commit}`])).trim(),
+        publicationRemote: publication.source,
+        publicationBranch: undefined,
+      };
+    }
     const pushRemote = await this.git
       .raw(['config', '--get', `branch.${branchName}.pushRemote`])
       .catch(() => '');
@@ -245,6 +244,108 @@ export class ReviewInventoryService {
           () => undefined,
         )
       : undefined;
+    if (publicationBranch && !publicationHead && mergeRef && trackingRemote.trim())
+      throw new Error(
+        `Publication history is unavailable: ${publicationBranch}. Fetch missing history and retry.`,
+      );
+    return { publicationHead, publicationRemote, publicationBranch };
+  }
+
+  /** Authoritative counts use supplied Git facts, never saved exploratory targets. */
+  async getSummary(
+    targetOverride?: string,
+    reviewedBranch?: string,
+    reviewedHead?: string,
+    checkout = false,
+    publication?: { head: string; source: string },
+  ) {
+    const verifyCheckout = async () => {
+      if (!checkout) return;
+      const current = (await this.git.revparse(['HEAD'])).trim();
+      const branch = (await this.git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+      if (current !== reviewedHead || branch !== reviewedBranch)
+        throw new Error('The captured checkout changed while reading branch status');
+    };
+    await verifyCheckout();
+    const comparison = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
+    const { head, targetHash, branchName, remotes } = comparison;
+    const published = await this.getPublication(branchName, remotes, publication);
+    const count = async (args: string[]) =>
+      Number((await this.git.raw(['rev-list', '--count', ...args, '--'])).trim());
+    const [ahead, pushedAhead, behind, dirty, edits] = await Promise.all([
+      targetHash
+        ? count([
+            head,
+            '--not',
+            targetHash,
+            ...(published.publicationHead ? [published.publicationHead] : []),
+          ])
+        : null,
+      targetHash
+        ? published.publicationHead
+          ? count([head, '--not', targetHash]).then(
+              async (total) =>
+                total -
+                (await count([head, '--not', targetHash, published.publicationHead ?? head])),
+            )
+          : Promise.resolve(0)
+        : null,
+      published.publicationHead ? count([published.publicationHead, '--not', head]) : null,
+      checkout
+        ? this.git
+            .raw(['status', '--porcelain=v1', '--untracked-files=all'])
+            .then((value) => Boolean(value.trim()))
+        : Promise.resolve(false),
+      checkout
+        ? this.parser.getReviewStats(
+            { baseCommitish: head, targetCommitish: '.', includeUntracked: true },
+            false,
+          )
+        : Promise.resolve(undefined),
+    ]);
+    await verifyCheckout();
+    return {
+      head,
+      branch: branchName,
+      target: comparison.target,
+      targetHash,
+      branchBase: comparison.branchBase,
+      baseSuggestion: comparison.baseSuggestion,
+      ...published,
+      availability: targetHash ? ('available' as const) : ('unavailable' as const),
+      ahead,
+      pushedAhead,
+      behind,
+      dirty: checkout ? dirty : null,
+      edits,
+    };
+  }
+
+  async getInventory(
+    targetOverride?: string,
+    ignoreWhitespace = false,
+    reviewedBranch?: string,
+    reviewedHead?: string,
+    checkout = false,
+    includePublished = !checkout,
+    publication?: { head: string; source: string },
+  ): Promise<ReviewInventory> {
+    const {
+      head,
+      branchName,
+      target,
+      targetHash,
+      branchBase,
+      targetOptions,
+      baseSuggestion,
+      remotes,
+      emptyTree,
+    } = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
+    const { publicationHead, publicationRemote } = await this.getPublication(
+      branchName,
+      remotes,
+      publication,
+    );
     const revisionArgs = [head, ...(targetHash ? ['--not', targetHash] : [])];
     const [log, unpublished, worktree, staged] = await Promise.all([
       this.git.raw([
@@ -312,6 +413,7 @@ export class ReviewInventoryService {
       commits,
       uncommitted: worktree.files ? worktree : undefined,
       stagedOnly: !worktree.files && staged.files > 0,
+      stagedAvailable: staged.files > 0,
       defaultSelection: null,
       reviewByDefault: false,
     };

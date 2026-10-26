@@ -144,6 +144,9 @@ export function createReviewCommand(): Command {
     .option('--head <oid>', 'immutable reviewed commit')
     .option('--base <ref>', 'explicit comparison base')
     .option('--checkout', 'include edits from the admitted current checkout')
+    .option('--summary', 'read authoritative branch counts without grouped diff statistics')
+    .option('--published-head <oid>', 'verified PR publication commit')
+    .option('--publication-source <repository>', 'verified PR source repository')
     .option(
       '--comparison-only',
       'resolve the comparison without reading diffs or commit statistics',
@@ -155,26 +158,39 @@ export function createReviewCommand(): Command {
         base?: string;
         checkout?: boolean;
         comparisonOnly?: boolean;
+        summary?: boolean;
+        publishedHead?: string;
+        publicationSource?: string;
       }) => {
         try {
           console.log(
             JSON.stringify(
-              options.comparisonOnly
-                ? await new ReviewInventoryService(process.cwd())
-                    .getComparison(options.base, options.branch, options.head)
-                    .then(({ head, branchBase, target, baseSuggestion }) => ({
-                      head,
-                      branchBase,
-                      target,
-                      baseSuggestion,
-                    }))
-                : await new ReviewInventoryService(process.cwd()).getInventory(
+              options.summary
+                ? await new ReviewInventoryService(process.cwd()).getSummary(
                     options.base,
-                    false,
                     options.branch,
                     options.head,
                     options.checkout,
-                  ),
+                    options.publishedHead
+                      ? { head: options.publishedHead, source: options.publicationSource ?? '' }
+                      : undefined,
+                  )
+                : options.comparisonOnly
+                  ? await new ReviewInventoryService(process.cwd())
+                      .getComparison(options.base, options.branch, options.head)
+                      .then(({ head, branchBase, target, baseSuggestion }) => ({
+                        head,
+                        branchBase,
+                        target,
+                        baseSuggestion,
+                      }))
+                  : await new ReviewInventoryService(process.cwd()).getInventory(
+                      options.base,
+                      false,
+                      options.branch,
+                      options.head,
+                      options.checkout,
+                    ),
             ),
           );
         } catch (error) {
