@@ -67,7 +67,10 @@ export function useReviewInventory(
       const previous = inventoryRef.current;
       const changedBranch =
         previous && (previous.branch !== data.branch || previous.target !== data.target);
-      if (!previous) activeRef.current = data.reviewByDefault;
+      if (!previous)
+        activeRef.current =
+          data.reviewByDefault ||
+          new URLSearchParams(window.location.search).get('reviewIntent') === 'default';
       if (changedBranch) customizedRef.current = false;
       let nextRange =
         !customizedRef.current || !previous
