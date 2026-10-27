@@ -186,6 +186,21 @@ describe('arbitrary branch review inventory', () => {
     });
   });
 
+  it('opens local-only work with a normal prospective push destination', async () => {
+    git('checkout', '-qb', 'feature');
+    const head = commit('local');
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('config', 'push.default', 'current');
+    const service = new ReviewInventoryService(root);
+    expect(await service.getSummary('trunk', 'feature')).toMatchObject({
+      ahead: null,
+      pushedAhead: null,
+    });
+    expect((await service.getInventory('trunk', false, 'feature')).commits).toEqual([
+      expect.objectContaining({ hash: head, pushed: false }),
+    ]);
+  });
+
   it('keeps absent upstream push counts unknown without failing a normal local branch', async () => {
     git('checkout', '-qb', 'feature');
     commit('local');
