@@ -225,7 +225,7 @@ export class ReviewInventoryService {
         publicationBranch: undefined,
       };
     }
-    const entries = (await this.git.raw(['config', '--null', '--list']))
+    const entries = (await this.git.raw(['config', '--list', '--null']))
       .split('\0')
       .filter(Boolean)
       .map((entry) => {
