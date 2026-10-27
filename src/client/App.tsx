@@ -27,6 +27,7 @@ import { Checkbox } from './components/Checkbox';
 import { CommentsDropdown } from './components/CommentsDropdown';
 import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
+import { DiffLoadingStatus } from './components/DiffLoadingStatus';
 import { ReviewPicker } from './components/ReviewPicker';
 import { useReviewInventory } from './hooks/useReviewInventory';
 import { useReviewSettings } from './hooks/useReviewSettings';
@@ -1606,6 +1607,7 @@ function App() {
                     />
                   </div>
                 </div>
+                {(loading || review.busy) && <DiffLoadingStatus />}
                 {review.inventory ? (
                   <ReviewPicker
                     inventory={review.inventory}
@@ -1614,6 +1616,7 @@ function App() {
                     notice={review.notice}
                     error={review.error}
                     busy={review.busy}
+                    loading={loading}
                     ignoreWhitespace={ignoreWhitespace}
                     onSelect={review.select}
                     onTargetChange={(target) => void review.changeTarget(target)}
@@ -1744,7 +1747,7 @@ function App() {
 
             <ReviewScrollContainer
               containerRef={diffScrollContainerRef}
-              aria-busy={loading}
+              aria-busy={loading || review.busy}
               className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
             >
               {diffData.files.length === 0 && (

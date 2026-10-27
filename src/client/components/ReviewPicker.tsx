@@ -15,6 +15,7 @@ import {
 import { ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
 
 import { ReviewTargetPicker } from './ReviewTargetPicker';
+import { DiffLoadingStatus } from './DiffLoadingStatus';
 
 import type { ReviewCommit, ReviewInventory, ReviewRange, ReviewStats } from '../../types/review';
 import {
@@ -149,6 +150,7 @@ interface ReviewPickerProps {
   notice: string;
   error: string | null;
   busy: boolean;
+  loading: boolean;
   ignoreWhitespace: boolean;
   onSelect: (ids: string[], only?: boolean) => void;
   onTargetChange: (target: string) => void;
@@ -162,6 +164,7 @@ export function ReviewPicker({
   notice,
   error,
   busy,
+  loading,
   ignoreWhitespace,
   onSelect,
   onTargetChange,
@@ -271,6 +274,11 @@ export function ReviewPicker({
                   onChange={onTargetChange}
                 />
               </div>
+              {(loading || busy) && (
+                <div className="mb-3">
+                  <DiffLoadingStatus />
+                </div>
+              )}
               {inventory.baseSuggestion && (
                 <p className="mb-3 text-xs text-github-text-secondary">
                   {inventory.baseSuggestion.reason}
