@@ -91,7 +91,7 @@ describe('arbitrary branch review inventory', () => {
     expect(summary).toMatchObject({ ahead: 3, pushedAhead: 1, dirty: true });
   });
 
-  it('does not read grouped diff statistics for committed-only summaries and rejects missing expected publication history', async () => {
+  it('preserves committed-only summaries and diagnoses missing optional publication history', async () => {
     git('checkout', '-qb', 'feature');
     commit('feature');
     const parser = new ReviewDiffParser(root);
@@ -103,9 +103,22 @@ describe('arbitrary branch review inventory', () => {
     git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
     git('config', 'branch.feature.remote', 'origin');
     git('config', 'branch.feature.merge', 'refs/heads/feature');
-    await expect(new ReviewInventoryService(root).getSummary('trunk', 'feature')).rejects.toThrow(
-      'Push comparison history is unavailable',
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await new ReviewInventoryService(root).getSummary('trunk', 'feature')).toMatchObject({
+      availability: 'available',
+      target: 'trunk',
+      ahead: null,
+      pushedAhead: null,
+      behind: null,
+    });
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Push comparison history is unavailable: refs/remotes/origin/feature',
+      ),
     );
+    await expect(
+      new ReviewInventoryService(root).getInventory('trunk', false, 'feature'),
+    ).rejects.toThrow('Push comparison history is unavailable');
   });
 
   it('maps PR upstreams through the native fetch refspec without requiring a PR lookup', async () => {
@@ -128,9 +141,12 @@ describe('arbitrary branch review inventory', () => {
     commit('local');
     expect(await service.getSummary(base, 'feature')).toMatchObject({ ahead: 1, pushedAhead: 1 });
     git('update-ref', '-d', 'refs/remotes/origin/pr/21140');
-    await expect(service.getSummary(base, 'feature')).rejects.toThrow(
-      'Push comparison history is unavailable',
-    );
+    expect(await service.getSummary(base, 'feature')).toMatchObject({
+      targetHash: base,
+      ahead: null,
+      pushedAhead: null,
+      behind: null,
+    });
   });
 
   it('counts a normal remote branch without a PR before and after local commits', async () => {
