@@ -229,14 +229,17 @@ export class ReviewInventoryService {
         .raw(['for-each-ref', '--format=%(push)', `refs/heads/${branchName}`])
         .catch(() => '')
     ).trim();
-    const publicationName =
-      publicationRemote === trackingRemote.trim()
-        ? mergeRef.replace(/^refs\/heads\//, '') || branchName
-        : branchName;
+    // Git maps branch.merge through remote.fetch. A PR ref or a custom fetch
+    // destination cannot be reconstructed by prepending refs/remotes/<remote>.
+    const upstreamRef = (
+      await this.git.raw(['for-each-ref', '--format=%(upstream)', `refs/heads/${branchName}`])
+    ).trim();
     const publicationBranch = publicationRemote
-      ? pushRef.startsWith(`refs/remotes/${publicationRemote}/`)
-        ? pushRef
-        : `refs/remotes/${publicationRemote}/${publicationName}`
+      ? pushRef ||
+        (publicationRemote === trackingRemote.trim() ? upstreamRef : '') ||
+        (!mergeRef || publicationRemote !== trackingRemote.trim()
+          ? `refs/remotes/${publicationRemote}/${branchName}`
+          : undefined)
       : undefined;
     const publicationHead = publicationBranch
       ? await this.git.revparse([`${publicationBranch}^{commit}`]).then(
@@ -244,9 +247,9 @@ export class ReviewInventoryService {
           () => undefined,
         )
       : undefined;
-    if (publicationBranch && !publicationHead && mergeRef && trackingRemote.trim())
+    if (publicationBranch && !publicationHead && (pushRef || upstreamRef))
       throw new Error(
-        `Publication history is unavailable: ${publicationBranch}. Fetch missing history and retry.`,
+        `Push comparison history is unavailable: ${publicationBranch}. Fetch missing history and retry.`,
       );
     return { publicationHead, publicationRemote, publicationBranch };
   }
@@ -273,22 +276,14 @@ export class ReviewInventoryService {
     const count = async (args: string[]) =>
       Number((await this.git.raw(['rev-list', '--count', ...args, '--'])).trim());
     const [ahead, pushedAhead, behind, dirty, edits] = await Promise.all([
-      targetHash
-        ? count([
-            head,
-            '--not',
-            targetHash,
-            ...(published.publicationHead ? [published.publicationHead] : []),
-          ])
+      targetHash && published.publicationHead
+        ? count([head, '--not', targetHash, published.publicationHead])
         : null,
-      targetHash
-        ? published.publicationHead
-          ? count([head, '--not', targetHash]).then(
-              async (total) =>
-                total -
-                (await count([head, '--not', targetHash, published.publicationHead ?? head])),
-            )
-          : Promise.resolve(0)
+      targetHash && published.publicationHead
+        ? count([head, '--not', targetHash]).then(
+            async (total) =>
+              total - (await count([head, '--not', targetHash, published.publicationHead ?? head])),
+          )
         : null,
       published.publicationHead ? count([published.publicationHead, '--not', head]) : null,
       checkout

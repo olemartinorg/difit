@@ -104,8 +104,81 @@ describe('arbitrary branch review inventory', () => {
     git('config', 'branch.feature.remote', 'origin');
     git('config', 'branch.feature.merge', 'refs/heads/feature');
     await expect(new ReviewInventoryService(root).getSummary('trunk', 'feature')).rejects.toThrow(
-      'Publication history is unavailable',
+      'Push comparison history is unavailable',
     );
+  });
+
+  it('maps PR upstreams through the native fetch refspec without requiring a PR lookup', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature');
+    const pushed = commit('pushed');
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('config', '--add', 'remote.origin.fetch', '+refs/pull/*/head:refs/remotes/origin/pr/*');
+    git('config', 'branch.feature.remote', 'origin');
+    git('config', 'branch.feature.merge', 'refs/pull/21140/head');
+    git('update-ref', 'refs/remotes/origin/pr/21140', pushed);
+    const service = new ReviewInventoryService(root);
+    expect(await service.getSummary(base, 'feature')).toMatchObject({
+      publicationBranch: 'refs/remotes/origin/pr/21140',
+      publicationHead: pushed,
+      ahead: 0,
+      pushedAhead: 1,
+      behind: 0,
+    });
+    commit('local');
+    expect(await service.getSummary(base, 'feature')).toMatchObject({ ahead: 1, pushedAhead: 1 });
+    git('update-ref', '-d', 'refs/remotes/origin/pr/21140');
+    await expect(service.getSummary(base, 'feature')).rejects.toThrow(
+      'Push comparison history is unavailable',
+    );
+  });
+
+  it('counts a normal remote branch without a PR before and after local commits', async () => {
+    git('checkout', '-qb', 'feature');
+    const pushed = commit('pushed');
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('config', 'branch.feature.remote', 'origin');
+    git('config', 'branch.feature.merge', 'refs/heads/feature');
+    git('update-ref', 'refs/remotes/origin/feature', pushed);
+    const service = new ReviewInventoryService(root);
+    expect(await service.getSummary('trunk', 'feature')).toMatchObject({
+      ahead: 0,
+      pushedAhead: 1,
+      behind: 0,
+    });
+    commit('local');
+    expect(await service.getSummary('trunk', 'feature')).toMatchObject({
+      ahead: 1,
+      pushedAhead: 1,
+      behind: 0,
+    });
+  });
+
+  it('treats an unmapped PR upstream as unknown instead of inventing a remote ref', async () => {
+    git('checkout', '-qb', 'feature');
+    commit('local');
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('config', 'branch.feature.remote', 'origin');
+    git('config', 'branch.feature.pushRemote', 'origin');
+    git('config', 'branch.feature.merge', 'refs/pull/21140/head');
+    expect(await new ReviewInventoryService(root).getSummary('trunk', 'feature')).toMatchObject({
+      availability: 'available',
+      publicationBranch: undefined,
+      ahead: null,
+      pushedAhead: null,
+      behind: null,
+    });
+  });
+
+  it('keeps absent upstream push counts unknown without failing a normal local branch', async () => {
+    git('checkout', '-qb', 'feature');
+    commit('local');
+    expect(await new ReviewInventoryService(root).getSummary('trunk', 'feature')).toMatchObject({
+      availability: 'available',
+      ahead: null,
+      pushedAhead: null,
+      behind: null,
+    });
   });
 
   it('resolves the captured comparison without reading diffs or commit statistics', async () => {
