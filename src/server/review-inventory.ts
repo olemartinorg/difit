@@ -1,3 +1,5 @@
+import { execFile as execute } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -5,6 +7,8 @@ import { simpleGit } from 'simple-git';
 import type { ReviewCommit, ReviewInventory, ReviewTarget } from '../types/review.js';
 import { getDefaultReviewRange, resolveReviewRange } from '../utils/reviewSelection.js';
 import { ReviewDiffParser } from './review-diff.js';
+
+const execFile = promisify(execute);
 
 export class ReviewInventoryService {
   private readonly git;
@@ -196,38 +200,51 @@ export class ReviewInventoryService {
     branchName: string,
     remotes: Array<{ name: string }>,
     publication?: { head: string; source: string },
+    summary = false,
   ) {
+    const resolvePublication = async (ref: string) => {
+      try {
+        const { stdout } = await execFile(
+          'git',
+          ['--no-optional-locks', 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+          { cwd: this.repoPath },
+        );
+        return stdout.trim();
+      } catch (error) {
+        if (!summary || (error as { code?: unknown }).code !== 1) throw error;
+        console.error(`Push comparison history is unavailable: ${ref}. ${String(error)}`);
+        return undefined;
+      }
+    };
     if (publication) {
       if (!publication.source || !/^[a-f0-9]{40,64}$/.test(publication.head))
         throw new Error('Verified publication identity is invalid');
       return {
-        publicationHead: (await this.git.revparse([`${publication.head}^{commit}`])).trim(),
+        publicationHead: await resolvePublication(publication.head),
         publicationRemote: publication.source,
         publicationBranch: undefined,
       };
     }
-    const pushRemote = await this.git
-      .raw(['config', '--get', `branch.${branchName}.pushRemote`])
-      .catch(() => '');
-    const defaultPushRemote = await this.git
-      .raw(['config', '--get', 'remote.pushDefault'])
-      .catch(() => '');
-    const trackingRemote = await this.git
-      .raw(['config', '--get', `branch.${branchName}.remote`])
-      .catch(() => '');
-    const publicationRemote = [
-      pushRemote.trim(),
-      defaultPushRemote.trim(),
-      trackingRemote.trim(),
-      'origin',
-    ].find((name) => remotes.some((remote) => remote.name === name));
-    const mergeRef = (
-      await this.git.raw(['config', '--get', `branch.${branchName}.merge`]).catch(() => '')
-    ).trim();
+    const entries = (await this.git.raw(['config', '--null', '--list']))
+      .split('\0')
+      .filter(Boolean)
+      .map((entry) => {
+        const separator = entry.indexOf('\n');
+        return [entry.slice(0, separator), entry.slice(separator + 1)] as const;
+      });
+    const config = new Map(entries);
+    const trackingRemote = config.get(`branch.${branchName}.remote`);
+    const selectedRemote =
+      config.get(`branch.${branchName}.pushremote`) ??
+      config.get('remote.pushdefault') ??
+      trackingRemote ??
+      'origin';
+    const publicationRemote = remotes.some((remote) => remote.name === selectedRemote)
+      ? selectedRemote
+      : undefined;
+    const mergeRef = config.get(`branch.${branchName}.merge`);
     const pushRef = (
-      await this.git
-        .raw(['for-each-ref', '--format=%(push)', `refs/heads/${branchName}`])
-        .catch(() => '')
+      await this.git.raw(['for-each-ref', '--format=%(push)', `refs/heads/${branchName}`])
     ).trim();
     // Git maps branch.merge through remote.fetch. A PR ref or a custom fetch
     // destination cannot be reconstructed by prepending refs/remotes/<remote>.
@@ -236,18 +253,25 @@ export class ReviewInventoryService {
     ).trim();
     const publicationBranch = publicationRemote
       ? pushRef ||
-        (publicationRemote === trackingRemote.trim() ? upstreamRef : '') ||
-        (!mergeRef || publicationRemote !== trackingRemote.trim()
+        (publicationRemote === trackingRemote ? upstreamRef : '') ||
+        (!mergeRef || publicationRemote !== trackingRemote
           ? `refs/remotes/${publicationRemote}/${branchName}`
           : undefined)
       : undefined;
-    const publicationHead = publicationBranch
-      ? await this.git.revparse([`${publicationBranch}^{commit}`]).then(
-          (value) => value.trim(),
-          () => undefined,
-        )
+    const knownRefs = summary
+      ? new Set((await this.git.raw(['for-each-ref', '--format=%(refname)'])).trim().split('\n'))
       : undefined;
-    if (publicationBranch && !publicationHead && (pushRef || upstreamRef))
+    const publicationHead =
+      publicationBranch &&
+      (!summary || upstreamRef || mergeRef || knownRefs?.has(publicationBranch))
+        ? summary
+          ? await resolvePublication(publicationBranch)
+          : await this.git.revparse([`${publicationBranch}^{commit}`]).then(
+              (value) => value.trim(),
+              () => undefined,
+            )
+        : undefined;
+    if (!summary && publicationBranch && !publicationHead && (pushRef || upstreamRef))
       throw new Error(
         `Push comparison history is unavailable: ${publicationBranch}. Fetch missing history and retry.`,
       );
@@ -272,7 +296,7 @@ export class ReviewInventoryService {
         throw new Error('The captured checkout changed while reading branch status');
     };
     await verifyCheckout();
-    const published = await this.getPublication(branchName, remotes, publication);
+    const published = await this.getPublication(branchName, remotes, publication, true);
     const count = async (args: string[]) =>
       Number((await this.git.raw(['rev-list', '--count', ...args, '--'])).trim());
     const [ahead, pushedAhead, behind, dirty, edits] = await Promise.all([
