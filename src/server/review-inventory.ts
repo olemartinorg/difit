@@ -271,7 +271,7 @@ export class ReviewInventoryService {
               () => undefined,
             )
         : undefined;
-    if (!summary && publicationBranch && !publicationHead && (pushRef || upstreamRef))
+    if (!summary && publicationBranch && !publicationHead && (mergeRef || upstreamRef))
       throw new Error(
         `Push comparison history is unavailable: ${publicationBranch}. Fetch missing history and retry.`,
       );
