@@ -1,10 +1,11 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 
 import { mockFetch as mockDefaultFetch } from '../../vitest.setup';
 import type { DiffCommentThread, DiffResponse } from '../types/diff';
+import type { ReviewInventory } from '../types/review';
 import type { ClientWatchState } from '../types/watch';
 import { DiffMode } from '../types/watch';
 
@@ -1322,5 +1323,172 @@ describe('App Component - Mobile sidebar auto-close', () => {
     await waitFor(() => {
       expect(toggleButton).toHaveAttribute('aria-expanded', 'false');
     });
+  });
+});
+
+describe('App Component - Comparison loading feedback', () => {
+  const base = 'a'.repeat(40),
+    parent = 'b'.repeat(40),
+    head = 'c'.repeat(40);
+  const inventory: ReviewInventory = {
+    repositoryId: 'repository-fixture',
+    branch: 'feature',
+    head,
+    branchBase: base,
+    target: 'main',
+    targetOptions: [
+      { name: 'main', kind: 'local' },
+      { name: 'other', kind: 'local' },
+    ],
+    commits: [
+      {
+        hash: head,
+        parent,
+        shortHash: head.slice(0, 7),
+        message: 'newest',
+        pushed: false,
+        isMerge: false,
+        timestamp: '2026-10-22T12:00:00Z',
+      },
+      {
+        hash: parent,
+        parent: base,
+        shortHash: parent.slice(0, 7),
+        message: 'oldest',
+        pushed: false,
+        isMerge: false,
+        timestamp: '2026-10-22T11:00:00Z',
+      },
+    ],
+    stagedOnly: false,
+    defaultSelection: { baseCommitish: base, targetCommitish: head },
+    reviewByDefault: true,
+  };
+  const initialDiff: DiffResponse = {
+    ...mockDiffResponse,
+    reviewAvailable: true,
+    baseCommitish: base,
+    targetCommitish: head,
+    requestedBaseCommitish: base,
+    requestedTargetCommitish: head,
+  };
+  const pending: {
+    finish: (response: Response) => void;
+    signal: AbortSignal | null | undefined;
+  }[] = [];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    pending.length = 0;
+    window.history.replaceState(null, '', '/');
+    mockFetch(initialDiff);
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/review?'))
+        return Promise.resolve(Response.json(inventory));
+      return defaultFetch(input, init);
+    });
+    renderApp();
+    const picker = await screen.findByRole('button', { name: 'Choose changes to review' });
+    await waitFor(() => expect(picker).toHaveTextContent('2 commits'));
+    await waitFor(() =>
+      expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false'),
+    );
+    // Keep new requests pending even after abort so stale completions can be exercised.
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/diff?')) {
+        return new Promise<Response>((finish) => pending.push({ finish, signal: init?.signal }));
+      }
+      if (String(input).startsWith('/api/review?'))
+        return Promise.resolve(Response.json(inventory));
+      return defaultFetch(input, init);
+    });
+    fireEvent.click(picker);
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  function toggleNewest() {
+    fireEvent.click(screen.getByRole('checkbox', { name: `Select ${head.slice(0, 7)} newest` }));
+  }
+
+  it('shows feedback immediately in the picker and toolbar until the response body loads', async () => {
+    toggleNewest();
+    const panel = screen.getByRole('dialog', { name: 'Changes to review' });
+    expect(within(panel).getByRole('status')).toHaveTextContent('Updating diff…');
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'true');
+    expect(document.querySelector('[data-file-path="test.ts"]')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose changes to review' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Updating diff…');
+    let finishBody!: (data: DiffResponse) => void;
+    const body = new Promise<DiffResponse>((resolve) => {
+      finishBody = resolve;
+    });
+    await act(async () => {
+      pending[0]!.finish({ ok: true, json: () => body } as Response);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Updating diff…');
+    await act(async () => {
+      finishBody({ ...initialDiff, targetCommitish: parent, requestedTargetCommitish: parent });
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('keeps feedback for the newest selection when an older request completes', async () => {
+    toggleNewest();
+    toggleNewest();
+    expect(pending).toHaveLength(2);
+    expect(pending[0]!.signal?.aborted).toBe(true);
+    await act(async () => {
+      pending[0]!.finish(Response.json({ ...initialDiff, files: [] }));
+    });
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getAllByRole('status')).toHaveLength(2);
+    expect(document.querySelector('[data-file-path="test.ts"]')).toBeInTheDocument();
+    await act(async () => {
+      pending[1]!.finish(Response.json(initialDiff));
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('clears feedback on a real failure and keeps the previous diff with an error', async () => {
+    toggleNewest();
+    await act(async () => {
+      pending[0]!.finish(new Response(null, { status: 500 }));
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to fetch diff data');
+    expect(document.querySelector('[data-file-path="test.ts"]')).toBeInTheDocument();
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('shows feedback while a target branch is being saved before loading its diff', async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    let finishSave!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) === '/api/review/target')
+        return new Promise<Response>((resolve) => {
+          finishSave = resolve;
+        });
+      return defaultFetch(input, init);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Target branch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'other' }));
+    expect(screen.getAllByRole('status')).toHaveLength(2);
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'true');
+    await act(async () => {
+      finishSave(Response.json({ ok: true }));
+    });
+    expect(pending).toHaveLength(1);
+    expect(screen.getAllByRole('status')).toHaveLength(2);
+    await act(async () => {
+      pending[0]!.finish(Response.json(initialDiff));
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
   });
 });
