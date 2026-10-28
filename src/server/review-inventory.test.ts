@@ -32,6 +32,69 @@ describe('arbitrary branch review inventory', () => {
     return git('rev-parse', 'HEAD');
   };
 
+  it('batch summaries equal individual calculations for distinct heads, configured mappings, ambiguity and checkout edits', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('remote', 'add', 'origin', 'https://github.com/owner/repo.git');
+    git('update-ref', 'refs/remotes/origin/trunk', base);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    const requests = [];
+    for (let index = 0; index < 5; index++) {
+      const branch = `feature-${index}`;
+      git('checkout', '-qB', branch, base);
+      const published = commit(`published-${index}`);
+      git('update-ref', `refs/remotes/origin/published-${index}`, published);
+      git('config', `branch.${branch}.remote`, 'origin');
+      git('config', `branch.${branch}.merge`, `refs/heads/published-${index}`);
+      const head = commit(`local-${index}`);
+      requests.push({ branch, head, checkout: index === 4 });
+    }
+    git('config', 'branch.feature-0.gh-merge-base', 'origin/trunk');
+    writeFileSync(join(root, 'file'), 'dirty checkout\n');
+    const before = readFileSync(join(root, '.git', 'index'));
+    const service = new ReviewInventoryService(root);
+    const individual = await Promise.all(
+      requests.map((request) =>
+        service.getSummary(undefined, request.branch, request.head, request.checkout),
+      ),
+    );
+    const batch = await service.getSummaryBatch(requests);
+    expect(batch.map((item) => item.status)).toEqual(individual);
+    expect(batch.every((item) => !item.error)).toBe(true);
+    expect(new Set(individual.map((item) => item.head)).size).toBe(5);
+    expect(individual[0]?.baseSuggestion.reason).toBe('Configured comparison base for this branch');
+    expect(individual[4]?.dirty).toBe(true);
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(before);
+    // No snapshot or query memo survives a batch, including another branch's effect on inference.
+    git('update-ref', 'refs/remotes/origin/trunk', requests[0]!.head);
+    const changed = await service.getSummaryBatch(requests);
+    expect(changed.map((item) => item.status)).toEqual(
+      await Promise.all(
+        requests.map((request) =>
+          service.getSummary(undefined, request.branch, request.head, request.checkout),
+        ),
+      ),
+    );
+    expect(changed[0]?.status?.targetHash).toBe(requests[0]!.head);
+  });
+
+  it('batch failures preserve successful peers and fresh checkout admission', async () => {
+    const head = git('rev-parse', 'HEAD');
+    const service = new ReviewInventoryService(root);
+    const requests = [
+      { branch: 'trunk', head, checkout: true },
+      { branch: 'missing', head: 'a'.repeat(40) },
+      { branch: 'wrong-checkout', head, checkout: true },
+    ];
+    const results = await service.getSummaryBatch(requests);
+    expect(results[0]?.status?.head).toBe(head);
+    expect(results[1]?.error).toBeTruthy();
+    expect(results[2]?.error).toContain('captured checkout changed');
+    await expect(service.getSummaryBatch([])).rejects.toThrow('between 1 and 128');
+    await expect(
+      service.getSummaryBatch(Array.from({ length: 129 }, () => requests[0]!)),
+    ).rejects.toThrow('between 1 and 128');
+  });
+
   it('counts published and local commits from captured PR history without symbolic defaults or exploratory settings', async () => {
     const base = git('rev-parse', 'HEAD');
     git('checkout', '-qb', 'feature');
