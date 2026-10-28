@@ -144,4 +144,78 @@ describe('review inventory selection', () => {
     );
     expect(result.current.range).toEqual({ oldest: 'worktree', newest: 'worktree' });
   });
+
+  it('updates the automatic PR range as local work appears and is published', async () => {
+    const published = inventory();
+    const local = {
+      ...published,
+      checkout: true,
+      commits: published.commits.map((commit) => ({
+        ...commit,
+        pushed: commit.hash !== head,
+      })),
+      uncommitted: { additions: 1, deletions: 0, files: 1, binaryFiles: 0 },
+    };
+    let data = published;
+    vi.mocked(fetch).mockImplementation(() => Promise.resolve(Response.json(data)));
+    const changed = vi.fn();
+    const { result } = renderHook(() => useReviewInventory(changed, true, false, false));
+    await waitFor(() => expect(result.current.range).toEqual({ oldest: parent, newest: head }));
+    data = local;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.range).toEqual({ oldest: head, newest: 'worktree' });
+    expect(changed).toHaveBeenLastCalledWith(
+      { baseCommitish: parent, targetCommitish: '.', includeUntracked: true },
+      local,
+      true,
+    );
+    data = published;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.range).toEqual({ oldest: parent, newest: head });
+    expect(changed).toHaveBeenLastCalledWith(
+      { baseCommitish: base, targetCommitish: head },
+      published,
+      true,
+    );
+  });
+
+  it.each(['pushed', 'empty'])(
+    'preserves an explicit %s range through refresh and reopening',
+    async (selection) => {
+      const data = {
+        ...inventory(),
+        checkout: true,
+        uncommitted: { additions: 1, deletions: 0, files: 1, binaryFiles: 0 },
+      };
+      vi.mocked(fetch).mockImplementation(() => Promise.resolve(Response.json(data)));
+      const changed = vi.fn();
+      const first = renderHook(() => useReviewInventory(changed, true, false, false));
+      await waitFor(() => expect(first.result.current.range?.oldest).toBe('worktree'));
+      act(() =>
+        first.result.current.select(
+          selection === 'pushed' ? [parent, head] : ['worktree'],
+          selection === 'pushed',
+        ),
+      );
+      const expectedRange = selection === 'pushed' ? { oldest: parent, newest: head } : null;
+      expect(first.result.current.range).toEqual(expectedRange);
+      await act(async () => {
+        await first.result.current.refresh();
+      });
+      expect(first.result.current.range).toEqual(expectedRange);
+      first.unmount();
+      const second = renderHook(() => useReviewInventory(changed, true, false, false));
+      await waitFor(() => expect(second.result.current.inventory).not.toBeNull());
+      expect(second.result.current.range).toEqual(expectedRange);
+      expect(changed).toHaveBeenLastCalledWith(
+        selection === 'pushed' ? { baseCommitish: base, targetCommitish: head } : null,
+        data,
+        true,
+      );
+    },
+  );
 });

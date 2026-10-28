@@ -228,8 +228,7 @@ describe('arbitrary branch review inventory', () => {
     expect(comparison).toMatchObject({ head, branchBase: base, target: 'trunk' });
     expect(stats).not.toHaveBeenCalled();
   });
-  it('includes published PR commits and staged, unstaged and untracked edits without changing the checkout or index', async () => {
-    const base = git('rev-parse', 'HEAD');
+  it('offers published PR commits but defaults to staged, unstaged and untracked edits without changing the checkout or index', async () => {
     git('checkout', '-qb', 'feature');
     const head = commit('published');
     git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
@@ -248,12 +247,11 @@ describe('arbitrary branch review inventory', () => {
       'feature',
       head,
       true,
-      true,
     );
     expect(inventory.commits).toEqual([expect.objectContaining({ hash: head, pushed: true })]);
     expect(inventory.uncommitted).toMatchObject({ files: 2, additions: 2, deletions: 1 });
     expect(inventory.defaultSelection).toEqual({
-      baseCommitish: base,
+      baseCommitish: head,
       targetCommitish: '.',
       includeUntracked: true,
     });
@@ -327,7 +325,7 @@ describe('arbitrary branch review inventory', () => {
     expect(inventory.commits[0]).toMatchObject({ hash: feature, pushed: false });
   });
 
-  it('defaults scoped reviews to published commits while current working review keeps local-only defaults', async () => {
+  it('defaults to published commits only when there is no local work', async () => {
     const base = git('rev-parse', 'HEAD');
     git('checkout', '-qb', 'feature');
     const head = commit('published change');
@@ -347,7 +345,7 @@ describe('arbitrary branch review inventory', () => {
     expect(scoped.commits).toEqual([expect.objectContaining({ hash: head, pushed: true })]);
     const current = await service.getInventory('trunk');
     expect(current.reviewedBranch).toBeUndefined();
-    expect(current.defaultSelection).toBeNull();
+    expect(current.defaultSelection).toEqual({ baseCommitish: base, targetCommitish: head });
     writeFileSync(join(root, 'file'), 'working edit\n');
     expect((await service.getInventory('trunk')).defaultSelection).toEqual({
       baseCommitish: head,

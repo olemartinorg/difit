@@ -183,6 +183,63 @@ describe('scoped review target API', () => {
     });
   });
 
+  it.each([
+    { localCommits: 2, dirty: true },
+    { localCommits: 2, dirty: false },
+    { localCommits: 0, dirty: true },
+    { localCommits: 0, dirty: false },
+  ])(
+    'prefers local work over a pushed PR history ($localCommits unpushed, dirty: $dirty)',
+    async ({ localCommits, dirty }) => {
+      const f = await fixture();
+      git('checkout', '-q', 'feature');
+      for (let count = 0; count < 8; count++)
+        git('commit', '--allow-empty', '-qm', `pushed ${count}`);
+      const published = git('rev-parse', 'HEAD');
+      git('update-ref', 'refs/remotes/origin/feature', published);
+      const localFiles = Array.from({ length: localCommits }, (_, index) => `local-${index}.txt`);
+      for (const file of localFiles) commit(file);
+      const head = git('rev-parse', 'HEAD');
+      if (dirty) {
+        writeFileSync(join(root, 'staged.txt'), 'staged\n');
+        git('add', 'staged.txt');
+        writeFileSync(join(root, 'untracked.txt'), 'untracked\n');
+      }
+      const index = readFileSync(join(root, '.git', 'index'));
+      const subject: ReviewSubject = {
+        ...f.subject,
+        head,
+        checkout: { branch: 'feature', head },
+        pullRequest: { ...f.subject.pullRequest!, head: published },
+      };
+      const context = new URLSearchParams({
+        reviewBranch: 'feature',
+        reviewSubject: JSON.stringify(subject),
+      });
+      const response = await fetch(`${f.origin}/api/review?${context}`);
+      expect(response.status).toBe(200);
+      const inventory = (await response.json()) as ReviewInventory;
+      expect(inventory.commits.filter((commit) => commit.pushed)).toHaveLength(10);
+      expect(inventory.commits.filter((commit) => !commit.pushed)).toHaveLength(localCommits);
+      const expected = {
+        baseCommitish: localCommits || dirty ? published : f.base,
+        targetCommitish: dirty ? '.' : head,
+        ...(dirty ? { includeUntracked: true } : {}),
+      };
+      expect(inventory.defaultSelection).toEqual(expected);
+      expect(resolveReviewRange(inventory, getDefaultReviewRange(inventory))).toEqual(expected);
+      const diff = await f.parser.parseDiff(expected);
+      expect(diff.files.map((file) => file.path).sort()).toEqual(
+        (localCommits || dirty
+          ? [...localFiles, ...(dirty ? ['staged.txt', 'untracked.txt'] : [])]
+          : ['first-feature.txt', 'second-feature.txt']
+        ).sort(),
+      );
+      expect(readFileSync(join(root, '.git', 'index'))).toEqual(index);
+      expect(git('rev-parse', 'HEAD')).toBe(head);
+    },
+  );
+
   it('changes compared OIDs and parsed files, validates against pinned head, and remembers the branch correction', async () => {
     const f = await fixture();
     // Remote-only PRs retain the captured head without a same-name local branch.
