@@ -73,6 +73,10 @@ it.each([false, true])(
         (await fetch(`${origin}/api/review-handoff/original-review/ack`, { method: 'POST' }))
           .status,
       ).toBe(200);
+      expect(
+        (await fetch(`${origin}/api/review-handoff/original-review/ack`, { method: 'POST' }))
+          .status,
+      ).toBe(200);
       if (!lost) expect(await response).toBe(200);
       expect(captures).toBe(1);
     } finally {

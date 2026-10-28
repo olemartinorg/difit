@@ -33,6 +33,7 @@ export function registerReviewHandoff(
   let pending: { snapshot: ReviewSubmission; response: Response; claimed: boolean } | null = null;
   let receiver: Response | null = null;
   let capturing = false;
+  let acknowledged: string | null = null;
 
   const deliver = () => {
     if (!pending || pending.claimed || !receiver) return;
@@ -112,11 +113,16 @@ export function registerReviewHandoff(
 
   app.post('/api/review-handoff/:id/ack', (req, res) => {
     if (!pending || !pending.claimed || pending.snapshot.id !== req.params.id) {
+      if (acknowledged === req.params.id) {
+        res.json({ success: true });
+        return;
+      }
       res.status(404).json({ error: 'Review submission is no longer pending.' });
       return;
     }
     const submission = pending;
     pending = null;
+    acknowledged = submission.snapshot.id;
     submission.response.json({ receivedByReceiver: true, id: submission.snapshot.id });
     res.json({ success: true });
   });
