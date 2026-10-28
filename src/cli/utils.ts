@@ -203,14 +203,6 @@ export function validateDiffArguments(
     }
   }
 
-  // Cannot compare same values
-  if (targetCommitish === baseCommitish) {
-    return {
-      valid: false,
-      error: `Cannot compare ${targetCommitish} with itself`,
-    };
-  }
-
   // "working" shows unstaged changes and can only be compared with staging area
   if (targetCommitish === 'working' && baseCommitish && baseCommitish !== 'staged') {
     return {
