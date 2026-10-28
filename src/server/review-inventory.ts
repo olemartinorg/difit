@@ -359,7 +359,6 @@ export class ReviewInventoryService {
     reviewedBranch?: string,
     reviewedHead?: string,
     checkout = false,
-    includePublished = !checkout,
     publication?: { head: string; source: string },
   ): Promise<ReviewInventory> {
     const {
@@ -431,7 +430,6 @@ export class ReviewInventoryService {
     );
     const inventory: ReviewInventory = {
       checkout,
-      includePublished,
       repositoryId: createHash('sha256').update(resolve(this.repoPath)).digest('hex'),
       branch: branchName,
       reviewedBranch,

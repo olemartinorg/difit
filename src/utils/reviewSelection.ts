@@ -30,12 +30,9 @@ export function getSelectedReviewUnits(units: string[], range: ReviewRange | nul
 
 export function getDefaultReviewRange(inventory: ReviewInventory): ReviewRange | null {
   const local = new Set(inventory.commits.filter((commit) => !commit.pushed).map((c) => c.hash));
-  const selected = getReviewUnits(inventory).filter(
-    (unit) =>
-      (inventory.reviewedBranch && (!inventory.checkout || inventory.includePublished)) ||
-      unit === WORKTREE_REVIEW_ID ||
-      local.has(unit),
-  );
+  const units = getReviewUnits(inventory);
+  const localUnits = units.filter((unit) => unit === WORKTREE_REVIEW_ID || local.has(unit));
+  const selected = localUnits.length ? localUnits : units;
   return rangeAt(selected, 0, selected.length - 1);
 }
 

@@ -41,7 +41,6 @@ export class ReviewApi {
       reviewedBranch,
       subject?.head,
       Boolean(subject?.checkout),
-      Boolean(subject?.pullRequest) || !subject?.checkout,
       subject?.pullRequest
         ? { head: subject.pullRequest.head, source: subject.sourceRepository ?? '' }
         : undefined,
@@ -124,7 +123,6 @@ export class ReviewApi {
           branch,
           subject?.head,
           Boolean(subject?.checkout),
-          Boolean(subject?.pullRequest) || !subject?.checkout,
         );
         if (inventory.target !== body.target)
           throw new Error(`Target branch does not exist: ${body.target}`);
