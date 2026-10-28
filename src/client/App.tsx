@@ -785,7 +785,7 @@ function App() {
         setIsCommentsListOpen(true);
       },
       onRefresh: () => {
-        reload();
+        void reload();
       },
     });
 
@@ -895,7 +895,14 @@ function App() {
         const response = await reviewFetch(`/api/diff?${params}`, {
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error('Failed to fetch diff data');
+        if (!response.ok) {
+          const failure = (await response.json().catch(() => null)) as { error?: unknown } | null;
+          throw new Error(
+            typeof failure?.error === 'string' && failure.error.trim()
+              ? failure.error
+              : `Failed to fetch diff data (HTTP ${response.status})`,
+          );
+        }
         const data = (await response.json()) as DiffResponse;
         if (diffRequestIdRef.current !== requestId) {
           return;
@@ -1101,7 +1108,7 @@ function App() {
       !watchState.isReloading &&
       !watchError
     )
-      reload();
+      void reload();
   }, [
     review.inventory,
     reviewSettings.autoRefresh,

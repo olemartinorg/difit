@@ -84,6 +84,8 @@ A captured empty-tree comparison means no comparison branch is known; it does
 not prevent reviewing the checkout's edits.
 If the picker cannot load, the toolbar shows the error with a retry action and
 an uncommitted-changes action for the captured checkout.
+Refresh failures show the server's explanation and keep the displayed diff and
+notes. If the checkout has moved, reopen Review to capture the current checkout.
 
 ### GitHub PR
 

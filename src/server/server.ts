@@ -166,14 +166,14 @@ export async function startServer(
           () => send(body),
           (error) => {
             res.status(409);
-            send(JSON.stringify({ error: String(error) }));
+            send(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
           },
         );
         return res;
       };
       next();
     } catch (error) {
-      res.status(409).json({ error: String(error) });
+      res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 

@@ -39,5 +39,7 @@ export async function assertReviewCheckout(
     git.revparse(['HEAD']),
   ]);
   if (branch.trim() !== subject.checkout.branch || head.trim() !== subject.checkout.head)
-    throw new Error('The checkout changed. The captured review and notes have been kept.');
+    throw new Error(
+      'The checkout changed. Reopen Review to use the current checkout. Your captured review and notes have been kept.',
+    );
 }

@@ -7,7 +7,7 @@ interface FileWatchHook {
   shouldReload: boolean;
   isConnected: boolean;
   error: string | null;
-  reload: () => void;
+  reload: () => Promise<void>;
   watchState: ClientWatchState;
 }
 
@@ -33,7 +33,8 @@ export function useFileWatch(
     connectionStatus: 'disconnected',
   });
 
-  const [error, setError] = useState<string | null>(null);
+  const [watchError, setWatchError] = useState<string | null>(null);
+  const [reloadError, setReloadError] = useState<string | null>(null);
 
   const connectToWatch = useCallback(() => {
     if (eventSourceRef.current) {
@@ -51,7 +52,7 @@ export function useFileWatch(
           connectionStatus: 'connected',
         }));
         reconnectAttemptsRef.current = 0;
-        setError(null);
+        setWatchError(null);
       };
 
       eventSource.onmessage = (event) => {
@@ -82,7 +83,7 @@ export function useFileWatch(
 
             case 'error':
               console.error('File watch error:', data.message);
-              setError(data.message || 'File watch error occurred');
+              setWatchError(data.message || 'File watch error occurred');
               break;
 
             case 'commentsChanged':
@@ -127,12 +128,12 @@ export function useFileWatch(
           }, reconnectDelay);
         } else {
           console.error('Max reconnection attempts reached');
-          setError('Lost connection to file watch service');
+          setWatchError('Lost connection to file watch service');
         }
       };
     } catch (connectionError) {
       console.error('Failed to connect to file watch service:', connectionError);
-      setError('Failed to connect to file watch service');
+      setWatchError('Failed to connect to file watch service');
     }
   }, [maxReconnectAttempts, onCommentsChanged, reconnectDelay]);
 
@@ -143,7 +144,8 @@ export function useFileWatch(
 
     reloadingRef.current = true;
     const sequence = changeSequenceRef.current;
-    setError(null);
+    setWatchError(null);
+    setReloadError(null);
     setWatchState((prev) => ({
       ...prev,
       isReloading: true,
@@ -162,12 +164,17 @@ export function useFileWatch(
         lastChangeTime: changeSequenceRef.current === sequence ? null : prev.lastChangeTime,
         lastChangeType: changeSequenceRef.current === sequence ? null : prev.lastChangeType,
       }));
-    } catch (reloadError) {
-      console.error('Reload failed:', reloadError);
-      setError('Failed to reload diff data');
+    } catch (cause) {
+      console.error('Reload failed:', cause);
+      setReloadError(
+        cause instanceof Error && cause.message.trim()
+          ? cause.message
+          : 'Failed to reload diff data',
+      );
 
       setWatchState((prev) => ({
         ...prev,
+        shouldReload: true,
         isReloading: false,
       }));
     } finally {
@@ -202,7 +209,7 @@ export function useFileWatch(
   return {
     shouldReload: watchState.shouldReload,
     isConnected: watchState.connectionStatus === 'connected',
-    error,
+    error: reloadError ?? watchError,
     reload: handleReload,
     watchState,
   };
