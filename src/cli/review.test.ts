@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
+import { ReviewInventoryService } from '../server/review-inventory.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -220,3 +222,17 @@ it.each([{ branch: 'feature' }, { sourceRepository: 'owner/repo', branch: '' }])
     expect(statSync(path).mtimeMs).toBe(metadata.mtimeMs);
   },
 );
+
+it('decodes Unicode branch names across fragmented summary-batch stdin', async () => {
+  const requests = [{ branch: 'føø', head: 'a'.repeat(40) }];
+  const bytes = Buffer.from(JSON.stringify(requests));
+  const split = bytes.indexOf(Buffer.from('ø')) + 1;
+  const input = Readable.from([bytes.subarray(0, split), bytes.subarray(split)]);
+  vi.spyOn(process, 'stdin', 'get').mockReturnValue(input as typeof process.stdin);
+  const summary = vi
+    .spyOn(ReviewInventoryService.prototype, 'getSummaryBatch')
+    .mockResolvedValue([]);
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  await createReviewCommand().parseAsync(['inventory', '--summary-batch'], { from: 'user' });
+  expect(summary).toHaveBeenCalledWith(requests);
+});
