@@ -10,9 +10,140 @@ import { ReviewDiffParser } from './review-diff.js';
 
 const execFile = promisify(execute);
 
+export type ReviewSummaryRequest = {
+  branch: string;
+  head: string;
+  base?: string;
+  checkout?: boolean;
+  publication?: { head: string; source: string };
+};
+
 export class ReviewInventoryService {
   private readonly git;
   private readonly parser;
+  private batch?: {
+    reads: Map<string, Promise<string>>;
+    refs: string[][];
+    config: string;
+    defaultBranch: Promise<string | null>;
+    remotes: Promise<{ name: string }[]>;
+  };
+
+  /** One finite repository snapshot; no state survives this CLI batch. */
+  async getSummaryBatch(requests: ReviewSummaryRequest[]) {
+    if (!Array.isArray(requests) || !requests.length || requests.length > 128 || this.batch)
+      throw new Error('Expected between 1 and 128 summary requests');
+    for (const request of requests) {
+      if (
+        !request ||
+        typeof request.branch !== 'string' ||
+        !request.branch ||
+        typeof request.head !== 'string' ||
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(request.head) ||
+        (request.base !== undefined && typeof request.base !== 'string') ||
+        (request.checkout !== undefined && typeof request.checkout !== 'boolean') ||
+        (request.publication !== undefined &&
+          (!request.publication ||
+            typeof request.publication.head !== 'string' ||
+            typeof request.publication.source !== 'string'))
+      )
+        throw new Error('Invalid summary request');
+    }
+    const [refs, config] = await Promise.all([
+      this.git.raw([
+        'for-each-ref',
+        '--format=%(refname)%00%(objectname)%00%(symref:short)%00%(push)%00%(upstream)',
+      ]),
+      this.git.raw(['config', '--list', '--null']),
+    ]);
+    this.batch = {
+      reads: new Map(),
+      refs: refs
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => line.split('\0')),
+      config,
+      defaultBranch: this.parser.getOriginDefaultBranch(),
+      remotes: this.git.getRemotes(),
+    };
+    try {
+      return await Promise.all(
+        requests.map(async (request) => {
+          try {
+            return {
+              branch: request.branch,
+              head: request.head,
+              status: await this.getSummary(
+                request.base,
+                request.branch,
+                request.head,
+                request.checkout,
+                request.publication,
+              ),
+            };
+          } catch (error) {
+            return { branch: request.branch, head: request.head, error: String(error) };
+          }
+        }),
+      );
+    } finally {
+      this.batch = undefined;
+    }
+  }
+
+  private read(args: string[]): Promise<string> {
+    const batch = this.batch;
+    // Checkout admission is always fresh, including the verification after edits.
+    if (!batch || args.includes('HEAD') || args[0] === 'symbolic-ref' || args[0] === 'status')
+      return Promise.resolve(this.git.raw(args));
+    if (args[0] === 'for-each-ref') {
+      const columns: Record<string, number[]> = {
+        '--format=%(refname)%00%(objectname)': [0, 1],
+        '--format=%(symref:short)': [2],
+        '--format=%(push)': [3],
+        '--format=%(upstream)': [4],
+        '--format=%(refname)': [0],
+      };
+      const selected = columns[args[1] ?? ''];
+      if (selected)
+        return Promise.resolve(
+          batch.refs
+            .filter(
+              (row) =>
+                !args[2] ||
+                args
+                  .slice(2)
+                  .some((prefix) => row[0] === prefix || row[0]?.startsWith(prefix + '/')),
+            )
+            .map((row) => selected.map((index) => row[index] ?? '').join('\0'))
+            .join('\n') + '\n',
+        );
+    }
+    if (args[0] === 'config') {
+      if (args[1] === '--list') return Promise.resolve(batch.config);
+      if (args[1] === '--get') {
+        const entry = batch.config
+          .split('\0')
+          .filter(Boolean)
+          .reverse()
+          .find((value) => value.startsWith(args[2] + '\n'));
+        return Promise.resolve(entry?.slice(entry.indexOf('\n') + 1) ?? '');
+      }
+    }
+    // Keep native argument order, including Git's choice among multiple merge bases.
+    const key = JSON.stringify(args);
+    let result = batch.reads.get(key);
+    if (!result) {
+      result = Promise.resolve(this.git.raw(args));
+      batch.reads.set(key, result);
+    }
+    return result;
+  }
+
+  private revparse(args: string[]) {
+    return this.read(['rev-parse', ...args]).then((value) => value.trim());
+  }
 
   constructor(
     private readonly repoPath: string,
@@ -43,7 +174,7 @@ export class ReviewInventoryService {
     const observations = await Promise.all(
       [...heads].map(async ([oid, names]) => {
         try {
-          const mergeBase = (await this.git.raw(['merge-base', head, oid])).trim();
+          const mergeBase = (await this.read(['merge-base', head, oid])).trim();
           return mergeBase === head ? undefined : { oid, names, mergeBase };
         } catch {
           return undefined; // Shallow and unrelated histories remain uncertain.
@@ -57,9 +188,7 @@ export class ReviewInventoryService {
             try {
               return [
                 mergeBase,
-                Number(
-                  (await this.git.raw(['rev-list', '--count', `${mergeBase}..${head}`])).trim(),
-                ),
+                Number((await this.read(['rev-list', '--count', `${mergeBase}..${head}`])).trim()),
               ] as const;
             } catch {
               return [mergeBase, undefined] as const;
@@ -97,7 +226,7 @@ export class ReviewInventoryService {
 
   async getComparison(targetOverride?: string, reviewedBranch?: string, reviewedHead?: string) {
     const [head, branch, refs, remotes, format] = await Promise.all([
-      this.git.revparse([
+      this.revparse([
         reviewedHead
           ? `${reviewedHead}^{commit}`
           : reviewedBranch
@@ -106,15 +235,15 @@ export class ReviewInventoryService {
       ]),
       reviewedBranch
         ? Promise.resolve(reviewedBranch)
-        : this.git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => 'Detached HEAD'),
-      this.git.raw([
+        : this.read(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => 'Detached HEAD'),
+      this.read([
         'for-each-ref',
         '--format=%(refname)%00%(objectname)',
         'refs/heads',
         'refs/remotes',
       ]),
-      this.git.getRemotes(),
-      this.git.raw(['rev-parse', '--show-object-format']),
+      this.batch?.remotes ?? this.git.getRemotes(),
+      this.revparse(['--show-object-format']),
     ]);
     const emptyTree = createHash(format.trim()).update('tree 0\0').digest('hex');
     // A captured review can start at the empty tree when no target is known.
@@ -134,17 +263,17 @@ export class ReviewInventoryService {
         kind: ref.startsWith('refs/remotes/') ? 'remote' : 'local',
       }),
     );
-    const remoteHeads = await this.git.raw([
+    const remoteHeads = await this.read([
       'for-each-ref',
       '--format=%(symref:short)',
       'refs/remotes',
     ]);
     const defaultBranch =
-      (await this.parser.getOriginDefaultBranch()) ??
+      (await (this.batch?.defaultBranch ?? this.parser.getOriginDefaultBranch())) ??
       remoteHeads.split('\n').find((ref) => ref.trim());
     const branchName = branch.trim();
     const explicitBase = (
-      await this.git.raw(['config', '--get', `branch.${branchName}.gh-merge-base`]).catch(() => '')
+      await this.read(['config', '--get', `branch.${branchName}.gh-merge-base`]).catch(() => '')
     ).trim();
     const validTarget = (candidate: string | undefined) =>
       candidate &&
@@ -198,9 +327,9 @@ export class ReviewInventoryService {
       ? undefined
       : (selectedTarget ??
         [baseSuggestion.ref, defaultBranch?.trim()].find((candidate) => validTarget(candidate)));
-    const targetHash = target ? await this.git.revparse([`${target}^{commit}`]) : undefined;
+    const targetHash = target ? await this.revparse([`${target}^{commit}`]) : undefined;
     const commonBase = targetHash
-      ? (await this.git.raw(['merge-base', head, targetHash]).catch(() => '')).trim()
+      ? (await this.read(['merge-base', head, targetHash]).catch(() => '')).trim()
       : '';
     if (targetHash && !commonBase)
       throw new Error(
@@ -249,7 +378,7 @@ export class ReviewInventoryService {
         publicationBranch: undefined,
       };
     }
-    const entries = (await this.git.raw(['config', '--list', '--null']))
+    const entries = (await this.read(['config', '--list', '--null']))
       .split('\0')
       .filter(Boolean)
       .map((entry) => {
@@ -268,12 +397,12 @@ export class ReviewInventoryService {
       : undefined;
     const mergeRef = config.get(`branch.${branchName}.merge`);
     const pushRef = (
-      await this.git.raw(['for-each-ref', '--format=%(push)', `refs/heads/${branchName}`])
+      await this.read(['for-each-ref', '--format=%(push)', `refs/heads/${branchName}`])
     ).trim();
     // Git maps branch.merge through remote.fetch. A PR ref or a custom fetch
     // destination cannot be reconstructed by prepending refs/remotes/<remote>.
     const upstreamRef = (
-      await this.git.raw(['for-each-ref', '--format=%(upstream)', `refs/heads/${branchName}`])
+      await this.read(['for-each-ref', '--format=%(upstream)', `refs/heads/${branchName}`])
     ).trim();
     const publicationBranch = publicationRemote
       ? pushRef ||
@@ -283,14 +412,14 @@ export class ReviewInventoryService {
           : undefined)
       : undefined;
     const knownRefs = summary
-      ? new Set((await this.git.raw(['for-each-ref', '--format=%(refname)'])).trim().split('\n'))
+      ? new Set((await this.read(['for-each-ref', '--format=%(refname)'])).trim().split('\n'))
       : undefined;
     const publicationHead =
       publicationBranch &&
       (!summary || upstreamRef || mergeRef || knownRefs?.has(publicationBranch))
         ? summary
           ? await resolvePublication(publicationBranch)
-          : await this.git.revparse([`${publicationBranch}^{commit}`]).then(
+          : await this.revparse([`${publicationBranch}^{commit}`]).then(
               (value) => value.trim(),
               () => undefined,
             )
@@ -314,15 +443,15 @@ export class ReviewInventoryService {
     const { head, targetHash, branchName, remotes } = comparison;
     const verifyCheckout = async () => {
       if (!checkout) return;
-      const current = (await this.git.revparse(['HEAD'])).trim();
-      const branch = (await this.git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+      const current = (await this.revparse(['HEAD'])).trim();
+      const branch = (await this.read(['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
       if (current !== head || branch !== branchName)
         throw new Error('The captured checkout changed while reading branch status');
     };
     await verifyCheckout();
     const published = await this.getPublication(branchName, remotes, publication, true);
     const count = async (args: string[]) =>
-      Number((await this.git.raw(['rev-list', '--count', ...args, '--'])).trim());
+      Number((await this.read(['rev-list', '--count', ...args, '--'])).trim());
     const [ahead, pushedAhead, behind, dirty, edits] = await Promise.all([
       targetHash && published.publicationHead
         ? count([head, '--not', targetHash, published.publicationHead])
@@ -390,15 +519,9 @@ export class ReviewInventoryService {
     );
     const revisionArgs = [head, ...(targetHash ? ['--not', targetHash] : [])];
     const [log, unpublished, worktree, staged] = await Promise.all([
-      this.git.raw([
-        'log',
-        '--first-parent',
-        '--format=%H%x00%P%x00%cI%x00%s',
-        ...revisionArgs,
-        '--',
-      ]),
+      this.read(['log', '--first-parent', '--format=%H%x00%P%x00%cI%x00%s', ...revisionArgs, '--']),
       publicationHead
-        ? this.git.raw([
+        ? this.read([
             'rev-list',
             head,
             '--not',
@@ -406,7 +529,7 @@ export class ReviewInventoryService {
             publicationHead,
             '--',
           ])
-        : this.git.raw(['rev-list', head, ...(targetHash ? ['--not', targetHash] : []), '--']),
+        : this.read(['rev-list', head, ...(targetHash ? ['--not', targetHash] : []), '--']),
       reviewedBranch && !checkout
         ? Promise.resolve({ additions: 0, deletions: 0, files: 0, binaryFiles: 0 })
         : this.parser.getReviewStats(

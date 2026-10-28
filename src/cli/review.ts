@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { migrateBranchReviews } from '../server/review-migration.js';
 import { createConnection } from 'node:net';
 import { ReviewStore } from '../server/review-store.js';
+import type { ReviewSummaryRequest } from '../server/review-inventory.js';
 import { ReviewInventoryService } from '../server/review-inventory.js';
 import { Command, Option } from 'commander';
 
@@ -144,6 +145,7 @@ export function createReviewCommand(): Command {
     .option('--head <oid>', 'immutable reviewed commit')
     .option('--base <ref>', 'explicit comparison base')
     .option('--checkout', 'include edits from the admitted current checkout')
+    .option('--summary-batch', 'read a bounded JSON array of captured summaries from stdin')
     .option('--summary', 'read authoritative branch counts without grouped diff statistics')
     .option('--published-head <oid>', 'verified PR publication commit')
     .option('--publication-source <repository>', 'verified PR source repository')
@@ -159,10 +161,38 @@ export function createReviewCommand(): Command {
         checkout?: boolean;
         comparisonOnly?: boolean;
         summary?: boolean;
+        summaryBatch?: boolean;
         publishedHead?: string;
         publicationSource?: string;
       }) => {
         try {
+          if (options.summaryBatch) {
+            if (
+              options.summary ||
+              options.branch ||
+              options.head ||
+              options.base ||
+              options.checkout ||
+              options.comparisonOnly ||
+              options.publishedHead ||
+              options.publicationSource
+            )
+              throw new Error('Summary batch does not accept scalar comparison options');
+            let input = '';
+            for await (const chunk of process.stdin) {
+              input += String(chunk);
+              if (Buffer.byteLength(input) > 1024 * 1024)
+                throw new Error('Summary batch input exceeds 1 MiB');
+            }
+            console.log(
+              JSON.stringify(
+                await new ReviewInventoryService(process.cwd()).getSummaryBatch(
+                  JSON.parse(input) as ReviewSummaryRequest[],
+                ),
+              ),
+            );
+            return;
+          }
           console.log(
             JSON.stringify(
               options.summary
