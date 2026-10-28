@@ -100,16 +100,8 @@ export function registerReviewHandoff(
       if (options.capture) snapshot = await options.capture(req, snapshot);
       pending = { snapshot, response: res, claimed: false };
       // Keep the browser request open until the receiver has written the review to stdout.
-      const timeout = setTimeout(() => {
-        if (pending?.response === res) pending = null;
-        res.status(408).json({
-          error: 'The agent did not acknowledge the review. Your comments have been kept.',
-        });
-      }, 120_000);
-      res.on('close', () => {
-        clearTimeout(timeout);
-        if (pending?.response === res) pending = null;
-      });
+      // The immutable capture owns delivery until receiver acknowledgement.
+      // Losing the submitting connection does not revoke accepted work.
       deliver();
     } catch {
       res.status(400).json({ error: 'Invalid review submission' });
