@@ -1625,6 +1625,43 @@ function App() {
                       setIsRevisionModalOpen(true);
                     }}
                   />
+                ) : diffData.reviewAvailable ? (
+                  review.error ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span role="alert" className="text-github-danger">
+                        {review.error}
+                      </span>
+                      <button
+                        type="button"
+                        className="text-github-link hover:underline"
+                        onClick={() => void review.refresh().catch(() => {})}
+                      >
+                        Retry change selection
+                      </button>
+                      {diffData.reviewSubject?.checkout && (
+                        <button
+                          type="button"
+                          className="text-github-link hover:underline"
+                          onClick={() => {
+                            const checkout = diffData.reviewSubject?.checkout;
+                            if (!checkout) return;
+                            review.useAdvanced();
+                            void handleRevisionChange({
+                              baseCommitish: checkout.head,
+                              targetCommitish: '.',
+                              includeUntracked: true,
+                            });
+                          }}
+                        >
+                          Uncommitted changes
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <span role="status" className="text-xs">
+                      Loading change selection…
+                    </span>
+                  )
                 ) : revisionOptions ? (
                   <DiffQuickMenu
                     options={revisionOptions}

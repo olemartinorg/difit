@@ -76,6 +76,12 @@ difit staged   # Staging area changes
 difit working  # Unstaged changes only
 ```
 
+Embedded checkout reviews use the change picker to select uncommitted changes,
+including staged and untracked files. A captured empty-tree comparison means no
+comparison branch is known; it does not prevent reviewing the checkout's edits.
+If the picker cannot load, the toolbar shows the error with a retry action and
+an uncommitted-changes action for the captured checkout.
+
 ### GitHub PR
 
 ```bash
