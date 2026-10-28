@@ -179,6 +179,7 @@ export function createReviewCommand(): Command {
             )
               throw new Error('Summary batch does not accept scalar comparison options');
             let input = '';
+            process.stdin.setEncoding('utf8');
             for await (const chunk of process.stdin) {
               input += String(chunk);
               if (Buffer.byteLength(input) > 1024 * 1024)
