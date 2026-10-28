@@ -117,6 +117,9 @@ export class ReviewInventoryService {
       this.git.raw(['rev-parse', '--show-object-format']),
     ]);
     const emptyTree = createHash(format.trim()).update('tree 0\0').digest('hex');
+    // A captured review can start at the empty tree when no target is known.
+    // It is a comparison boundary, not a commit or a branch to resolve.
+    const capturedEmptyTree = targetOverride === emptyTree;
     const references = refs
       .trim()
       .split('\n')
@@ -151,29 +154,39 @@ export class ReviewInventoryService {
       throw new Error(
         `Comparison target is unavailable: ${targetOverride}. Fetch missing history and retry.`,
       );
-    const selectedTarget = [targetOverride, explicitBase].find(validTarget);
-    const baseSuggestion = selectedTarget
+    const selectedTarget = capturedEmptyTree
+      ? undefined
+      : [targetOverride, explicitBase].find(validTarget);
+    const baseSuggestion = capturedEmptyTree
       ? {
-          ref: selectedTarget,
-          reason:
-            selectedTarget === targetOverride
-              ? 'Selected comparison base'
-              : 'Configured comparison base for this branch',
-          ambiguous: false,
-          candidates: [selectedTarget],
+          ref: undefined,
+          reason: 'No comparison branch was captured',
+          ambiguous: true,
+          candidates: [],
         }
-      : await this.suggestBase(
-          head.trim(),
-          branchName,
-          references.map(({ ref, head: oid }) => ({
-            name: ref.replace(/^refs\/(heads|remotes)\//, ''),
-            head: oid,
-          })),
-          defaultBranch?.trim(),
-        );
-    const target =
-      selectedTarget ??
-      [baseSuggestion.ref, defaultBranch?.trim()].find((candidate) => validTarget(candidate));
+      : selectedTarget
+        ? {
+            ref: selectedTarget,
+            reason:
+              selectedTarget === targetOverride
+                ? 'Selected comparison base'
+                : 'Configured comparison base for this branch',
+            ambiguous: false,
+            candidates: [selectedTarget],
+          }
+        : await this.suggestBase(
+            head.trim(),
+            branchName,
+            references.map(({ ref, head: oid }) => ({
+              name: ref.replace(/^refs\/(heads|remotes)\//, ''),
+              head: oid,
+            })),
+            defaultBranch?.trim(),
+          );
+    const target = capturedEmptyTree
+      ? undefined
+      : (selectedTarget ??
+        [baseSuggestion.ref, defaultBranch?.trim()].find((candidate) => validTarget(candidate)));
     const targetHash = target ? await this.git.revparse([`${target}^{commit}`]) : undefined;
     const commonBase = targetHash
       ? (await this.git.raw(['merge-base', head, targetHash]).catch(() => '')).trim()
