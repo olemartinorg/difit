@@ -170,6 +170,35 @@ vi.mock('./git-diff.js', () => {
 });
 
 describe('Server Integration Tests', () => {
+  it.each(['/api/diff', '/api/review'])(
+    'explains how to recover a changed checkout on %s without loading another diff',
+    async (path) => {
+      const result = await startServer({ preferredPort: 0, openBrowser: false, keepAlive: true });
+      try {
+        const head = 'c'.repeat(40);
+        const query = new URLSearchParams({
+          reviewSubject: JSON.stringify({
+            repository: 'fixture',
+            branch: 'fixture-branch',
+            head,
+            checkout: { branch: 'fixture-branch', head },
+          }),
+        });
+        const calls = parserInstances.at(-1).parseDiff.mock.calls.length;
+        const response = await fetch(`http://localhost:${result.port}${path}?${query}`);
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          error:
+            'The checkout changed. Reopen Review to use the current checkout. Your captured review and notes have been kept.',
+        });
+        expect(parserInstances.at(-1).parseDiff).toHaveBeenCalledTimes(calls);
+      } finally {
+        result.server!.closeAllConnections();
+        await new Promise<void>((resolve) => result.server!.close(() => resolve()));
+      }
+    },
+  );
+
   describe('Comments API', () => {
     it('should accept properly formatted comments', async () => {
       const port = await getAvailablePort(4966);

@@ -1534,6 +1534,45 @@ describe('App Component - Comparison loading feedback', () => {
     expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
   });
 
+  it.each([
+    {
+      status: 409,
+      body: JSON.stringify({
+        error: 'The checkout changed. Reopen Review to use the current checkout.',
+      }),
+      message: 'The checkout changed. Reopen Review to use the current checkout.',
+    },
+    {
+      status: 500,
+      body: JSON.stringify({
+        error: 'Comparison history is unavailable. Fetch missing history and retry.',
+      }),
+      message: 'Comparison history is unavailable. Fetch missing history and retry.',
+    },
+    {
+      status: 502,
+      body: '<html>Bad gateway</html>',
+      message: 'Failed to fetch diff data (HTTP 502)',
+    },
+    {
+      status: 500,
+      body: JSON.stringify({ error: { unexpected: true } }),
+      message: 'Failed to fetch diff data (HTTP 500)',
+    },
+  ])(
+    'preserves the existing diff and displays a useful HTTP $status failure',
+    async ({ status, body, message }) => {
+      toggleNewest();
+      await act(async () => {
+        pending[0]!.finish(new Response(body, { status }));
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(message);
+      expect(document.querySelector('[data-file-path="test.ts"]')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+      expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
+    },
+  );
+
   it('shows feedback while a target branch is being saved before loading its diff', async () => {
     const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
     let finishSave!: (response: Response) => void;

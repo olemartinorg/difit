@@ -280,10 +280,50 @@ describe('useFileWatch', () => {
       });
 
       await waitFor(() => {
-        expect(result.current.error).toBe('Failed to reload diff data');
+        expect(result.current.error).toBe('Reload failed');
         expect(result.current.watchState.isReloading).toBe(false);
       });
     });
+
+    it('keeps the reload failure and retry available through reconnection until a successful reload', async () => {
+      const message = 'The checkout changed. Reopen Review to use the current checkout.';
+      const onReload = vi
+        .fn()
+        .mockRejectedValueOnce(new Error(message))
+        .mockResolvedValueOnce(undefined);
+      const { result } = renderHook(() => useFileWatch(onReload));
+      await waitFor(() => expect(result.current.isConnected).toBe(true));
+      await act(async () => {
+        await result.current.reload();
+      });
+      expect(result.current.error).toBe(message);
+      expect(result.current.shouldReload).toBe(true);
+      act(() => {
+        MockEventSource.instances[0]!.onopen?.(new Event('open'));
+      });
+      expect(result.current.error).toBe(message);
+      await act(async () => {
+        await result.current.reload();
+      });
+      expect(onReload).toHaveBeenCalledTimes(2);
+      expect(result.current.error).toBeNull();
+      expect(result.current.shouldReload).toBe(false);
+    });
+
+    it.each([undefined, '', '  '])(
+      'uses a useful fallback for a reload failure without a message (%s)',
+      async (message) => {
+        const { result } = renderHook(() =>
+          useFileWatch(vi.fn().mockRejectedValue(new Error(message))),
+        );
+        await waitFor(() => expect(result.current.isConnected).toBe(true));
+        await act(async () => {
+          await result.current.reload();
+        });
+        expect(result.current.error).toBe('Failed to reload diff data');
+        expect(result.current.shouldReload).toBe(true);
+      },
+    );
 
     it('should not reload if already reloading', async () => {
       const mockOnReload = vi
