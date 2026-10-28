@@ -353,14 +353,9 @@ describe('CLI Utils', () => {
     });
 
     describe('same value comparison', () => {
-      it('should reject same target and base values', () => {
-        const result1 = validateDiffArguments('HEAD', 'HEAD');
-        expect(result1.valid).toBe(false);
-        expect(result1.error).toBe('Cannot compare HEAD with itself');
-
-        const result2 = validateDiffArguments('main', 'main');
-        expect(result2.valid).toBe(false);
-        expect(result2.error).toBe('Cannot compare main with itself');
+      it('allows identical revision strings as an empty comparison', () => {
+        expect(validateDiffArguments('HEAD', 'HEAD')).toEqual({ valid: true });
+        expect(validateDiffArguments('main', 'main')).toEqual({ valid: true });
       });
 
       it('should allow different values', () => {

@@ -84,6 +84,14 @@ it('publishes the actual comparison snapshot and files after a scoped review tar
       expect(response.status).toBe(200);
       return (await response.json()) as DiffResponse;
     };
+    // Empty comparisons use the same API, review identity and native controls.
+    const identical = await diffFor({ baseCommitish: head, targetCommitish: head });
+    expect(identical.files).toEqual([]);
+    expect(identical.isEmpty).toBe(true);
+    git('branch', 'same-commit', head);
+    const aliases = await diffFor({ baseCommitish: 'same-commit', targetCommitish: 'feature' });
+    expect(aliases.files).toEqual([]);
+    expect(aliases.isEmpty).toBe(true);
     const initial = await diffFor({ baseCommitish: base, targetCommitish: head });
     expect(initial.reviewSubject).toMatchObject({ head, comparisonHead: head, baseHead: base });
     expect(initial.files.map(({ path }) => path).sort()).toEqual([
