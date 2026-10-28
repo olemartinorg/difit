@@ -211,6 +211,74 @@ function mockReviewResponse(url: string): Response | undefined {
   return undefined;
 }
 
+describe('review inventory failure recovery', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it.each([true, false])(
+    'shows the inventory failure and retries without the old picker (checkout: %s)',
+    async (checkout) => {
+      const head = 'c'.repeat(40);
+      window.history.replaceState(null, '', '/?reviewIntent=default');
+      mockFetch({
+        ...mockDiffResponse,
+        reviewAvailable: true,
+        reviewSubject: {
+          repository: 'fixture',
+          branch: 'feature',
+          head,
+          ...(checkout ? { checkout: { branch: 'feature', head } } : {}),
+        },
+      });
+      const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+      let failed = true;
+      vi.mocked(fetch).mockImplementation((input, init) => {
+        if (String(input).startsWith('/api/review?'))
+          return Promise.resolve(
+            failed
+              ? Response.json({ error: 'Comparison history is unavailable' }, { status: 400 })
+              : Response.json({
+                  repositoryId: 'fixture',
+                  branch: 'feature',
+                  head,
+                  branchBase: head,
+                  commits: [],
+                  targetOptions: [],
+                  stagedOnly: false,
+                  reviewByDefault: true,
+                  uncommitted: { additions: 14, deletions: 0, files: 1, binaryFiles: 0 },
+                }),
+          );
+        return defaultFetch(input, init);
+      });
+      renderApp();
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Comparison history is unavailable',
+      );
+      expect(screen.queryByRole('button', { name: /^Revision menu:/ })).not.toBeInTheDocument();
+      expect(document.querySelector('[data-file-path="test.ts"]')).toBeInTheDocument();
+      const uncommitted = screen.queryByRole('button', { name: 'Uncommitted changes' });
+      if (checkout) {
+        expect(uncommitted).toBeInTheDocument();
+        fireEvent.click(uncommitted!);
+        await waitFor(() =>
+          expect(fetch).toHaveBeenCalledWith(
+            expect.stringContaining(`base=${head}&target=.&includeUntracked=true`),
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+          ),
+        );
+      } else expect(uncommitted).not.toBeInTheDocument();
+      failed = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Retry change selection' }));
+      expect(
+        await screen.findByRole('button', { name: 'Choose changes to review' }),
+      ).toHaveTextContent('uncommitted changes');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Choose changes to review' }));
+      expect(screen.getByRole('checkbox', { name: 'Select uncommitted changes' })).toBeChecked();
+    },
+  );
+});
+
 function mockFetch(response: DiffResponse): void {
   mockDefaultFetch(response);
   const defaultFetch = vi.mocked(global.fetch).getMockImplementation();
