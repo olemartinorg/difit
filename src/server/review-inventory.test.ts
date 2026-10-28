@@ -170,6 +170,46 @@ describe('arbitrary branch review inventory', () => {
     });
   });
 
+  it('compares the known default branch with its remote instead of an older feature branch', async () => {
+    const old = git('rev-parse', 'HEAD');
+    git('branch', 'old-feature', old);
+    const head = commit('default branch update');
+    git('remote', 'add', 'origin', 'https://github.com/fixture/repo.git');
+    git('update-ref', 'refs/remotes/origin/trunk', head);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+    git('config', 'branch.trunk.remote', 'origin');
+    git('config', 'branch.trunk.merge', 'refs/heads/trunk');
+    const before = readFileSync(join(root, '.git', 'index'));
+    const service = new ReviewInventoryService(root);
+    expect(await service.getSummary(undefined, 'trunk', head, true)).toMatchObject({
+      target: 'origin/trunk',
+      targetHash: head,
+      ahead: 0,
+      pushedAhead: 0,
+      behind: 0,
+      baseSuggestion: { ambiguous: false, reason: 'Known default branch publication' },
+    });
+    const remote = git(
+      'commit-tree',
+      git('rev-parse', 'HEAD^{tree}'),
+      '-p',
+      head,
+      '-m',
+      'remote update',
+    );
+    git('update-ref', 'refs/remotes/origin/trunk', remote);
+    expect(await service.getSummary(undefined, 'trunk', head)).toMatchObject({
+      target: 'origin/trunk',
+      targetHash: remote,
+      pushedAhead: 0,
+      behind: 1,
+    });
+    expect((await service.getComparison('old-feature', 'trunk', head)).target).toBe('old-feature');
+    git('config', 'branch.trunk.gh-merge-base', 'old-feature');
+    expect((await service.getComparison(undefined, 'trunk', head)).target).toBe('old-feature');
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(before);
+  });
+
   it('treats an unmapped PR upstream as unknown instead of inventing a remote ref', async () => {
     git('checkout', '-qb', 'feature');
     commit('local');
