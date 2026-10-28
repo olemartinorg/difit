@@ -157,6 +157,10 @@ export class ReviewInventoryService {
     const selectedTarget = capturedEmptyTree
       ? undefined
       : [targetOverride, explicitBase].find(validTarget);
+    const defaultPublication = defaultBranch?.trim();
+    const reviewingDefault =
+      defaultPublication &&
+      remotes.some((remote) => defaultPublication === `${remote.name}/${branchName}`);
     const baseSuggestion = capturedEmptyTree
       ? {
           ref: undefined,
@@ -174,15 +178,22 @@ export class ReviewInventoryService {
             ambiguous: false,
             candidates: [selectedTarget],
           }
-        : await this.suggestBase(
-            head.trim(),
-            branchName,
-            references.map(({ ref, head: oid }) => ({
-              name: ref.replace(/^refs\/(heads|remotes)\//, ''),
-              head: oid,
-            })),
-            defaultBranch?.trim(),
-          );
+        : reviewingDefault
+          ? {
+              ref: defaultPublication,
+              reason: 'Known default branch publication',
+              ambiguous: false,
+              candidates: [defaultPublication],
+            }
+          : await this.suggestBase(
+              head.trim(),
+              branchName,
+              references.map(({ ref, head: oid }) => ({
+                name: ref.replace(/^refs\/(heads|remotes)\//, ''),
+                head: oid,
+              })),
+              defaultBranch?.trim(),
+            );
     const target = capturedEmptyTree
       ? undefined
       : (selectedTarget ??
