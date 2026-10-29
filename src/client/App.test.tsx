@@ -1329,6 +1329,29 @@ describe('App Component - Revision-aware refetching', () => {
 });
 
 describe('App Component - Sidebar persistence', () => {
+  it('preserves manual file collapse when a different file advances the same review', async () => {
+    mockWatchState.shouldReload = true;
+    mockWatchState.lastChangeType = 'file';
+    mockFetch({ ...mockDiffResponse, commit: 'h1', targetCommitish: 'h1' });
+    renderApp();
+    fireEvent.click(await screen.findByTitle('Collapse file (Alt+Click to collapse all)'));
+    expect(screen.getByTitle('Expand file (Alt+Click to expand all)')).toBeInTheDocument();
+    mockFetch({
+      ...mockDiffResponse,
+      commit: 'h2',
+      targetCommitish: 'h2',
+      requestedTargetCommitish: 'h2',
+      files: [
+        ...mockDiffResponse.files,
+        { path: 'another.ts', status: 'modified', additions: 1, deletions: 0, chunks: [] },
+      ],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() =>
+      expect(document.querySelector('[data-file-path="another.ts"]')).toBeInTheDocument(),
+    );
+    expect(screen.getByTitle('Expand file (Alt+Click to expand all)')).toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mockComments = [];
