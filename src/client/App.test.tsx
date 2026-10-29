@@ -1783,3 +1783,164 @@ describe('App Component - Comparison loading feedback', () => {
     expect(document.querySelector('main')).toHaveAttribute('aria-busy', 'false');
   });
 });
+
+describe('notes submitted during initial comment loading', () => {
+  let mockedComments: typeof useDiffComments | undefined;
+  beforeEach(async () => {
+    mockedComments = vi.mocked(useDiffComments).getMockImplementation();
+    const actual =
+      await vi.importActual<typeof import('./hooks/useDiffComments')>('./hooks/useDiffComments');
+    vi.mocked(useDiffComments).mockImplementation(actual.useDiffComments);
+  });
+  afterEach(() => {
+    if (mockedComments) vi.mocked(useDiffComments).mockImplementation(mockedComments);
+  });
+  it.each([false, true])(
+    'keeps a first note and existing server threads (save rejected: %s)',
+    async (rejectSave) => {
+      const repository = 'bootstrap-repository',
+        review = 'bootstrap-review';
+      const cacheKey = `difit-review-comments-v1/${repository}/${review}`;
+      const saved = createMockThread({
+        id: 'server',
+        filePath: 'test.ts',
+        line: 1,
+        body: 'Existing server note',
+      });
+      const stale = createMockThread({
+        id: 'stale',
+        filePath: 'test.ts',
+        line: 1,
+        body: 'Obsolete browser note',
+      });
+      localStorage.setItem(
+        cacheKey,
+        JSON.stringify({ threads: [stale], appliedCommentImportIds: [] }),
+      );
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reads = 0;
+      const serverThreads = [saved];
+      type Write = {
+        writeId: string;
+        operations: { kind: string; id: string; threadId?: string; value: unknown }[];
+      };
+      const writes: Write[] = [],
+        accepted = new Set<string>();
+      mockFetch({
+        ...mockDiffResponse,
+        repositoryId: repository,
+        reviewId: review,
+        files: [
+          {
+            ...mockDiffResponse.files[0]!,
+            chunks: [
+              {
+                header: '@@ -1 +1 @@',
+                oldStart: 1,
+                oldLines: 1,
+                newStart: 1,
+                newLines: 1,
+                lines: [
+                  { type: 'delete', content: 'old', oldLineNumber: 1 },
+                  { type: 'add', content: 'note anchor', newLineNumber: 1 },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        const path = String(input);
+        if (path.startsWith('/api/comments-json')) {
+          reads++;
+          await pending;
+          return Response.json({ version: 1, threads: serverThreads });
+        }
+        if (path.startsWith('/api/comments?') && init?.method === 'POST') {
+          const write = JSON.parse(String(init.body)) as Write;
+          if (write.operations.some((op) => op.kind !== 'form')) {
+            writes.push(write);
+            if (rejectSave) return Response.json({ error: 'Save rejected' }, { status: 503 });
+            if (!accepted.has(write.writeId)) {
+              for (const op of write.operations) {
+                if (op.kind === 'thread') serverThreads.push(op.value as DiffCommentThread);
+                else if (op.kind === 'message') {
+                  const thread = serverThreads.find((thread) => thread.id === op.threadId)!;
+                  thread.messages = thread.messages.map((message) =>
+                    message.id === op.id ? (op.value as typeof message) : message,
+                  );
+                }
+              }
+              accepted.add(write.writeId);
+            }
+          }
+          return Response.json({ version: 2, merged: true, threads: serverThreads });
+        }
+        return defaultFetch(input, init);
+      });
+      renderApp();
+      await waitFor(() => expect(reads).toBe(1));
+      const cell = [...document.querySelectorAll('[data-diff-line-row] td:last-child')].find(
+        (cell) => cell.textContent?.includes('note anchor'),
+      )!;
+      fireEvent.click(cell);
+      fireEvent.click(cell, { shiftKey: true });
+      const field = await screen.findByPlaceholderText('Leave a comment...');
+      fireEvent.change(field, { target: { value: 'Keep the first note' } });
+      const notification = mockCommentsChanged?.();
+      await act(async () => {
+        fireEvent.submit(field.closest('form')!);
+        expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
+        release();
+        await notification;
+      });
+      expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
+      await waitFor(() => expect(writes).toHaveLength(1));
+      expect(writes[0]!.operations).toEqual([
+        expect.objectContaining({
+          kind: 'thread',
+          value: expect.objectContaining({
+            messages: [expect.objectContaining({ body: 'Keep the first note' })],
+          }),
+        }),
+      ]);
+      expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
+      expect(screen.queryByPlaceholderText('Leave a comment...')).not.toBeInTheDocument();
+      if (rejectSave) {
+        await waitFor(() => expect(document.body).toHaveTextContent('Review save failed'));
+        const pendingPrefix = `difit-pending-comments/${review}/`;
+        expect(Object.keys(localStorage).some((key) => key.startsWith(pendingPrefix))).toBe(true);
+        await act(async () => {
+          await mockCommentsChanged?.();
+        });
+        expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
+        rejectSave = false;
+        const note = screen.getByText('Keep the first note').closest('[data-live-comment-editor]')!;
+        fireEvent.click(within(note as HTMLElement).getByTitle('Edit message'));
+        const edit = screen.getByPlaceholderText('Edit your message...');
+        fireEvent.change(edit, { target: { value: 'Keep the first note, edited' } });
+        fireEvent.submit(edit.closest('form')!);
+        await waitFor(() =>
+          expect(Object.keys(localStorage).some((key) => key.startsWith(pendingPrefix))).toBe(
+            false,
+          ),
+        );
+        expect(writes[1]!.writeId).toBe(writes[0]!.writeId);
+        expect(accepted.size).toBe(2);
+      }
+      await waitFor(() => expect(localStorage.getItem(cacheKey)).toContain('Existing server note'));
+      expect(localStorage.getItem(cacheKey)).not.toContain('Obsolete browser note');
+      expect(serverThreads).toHaveLength(2);
+      expect(serverThreads[0]).toEqual(saved);
+      expect(
+        writes.filter((write) =>
+          write.operations.some((op) => op.kind === 'thread' && op.value === null),
+        ),
+      ).toHaveLength(0);
+    },
+  );
+});
