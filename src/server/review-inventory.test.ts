@@ -32,6 +32,40 @@ describe('arbitrary branch review inventory', () => {
     return git('rev-parse', 'HEAD');
   };
 
+  it('counts local-only commits against the resolved review target while keeping publication unknown', async () => {
+    const base = git('rev-parse', 'HEAD');
+    git('checkout', '-qb', 'feature');
+    commit('one');
+    const head = commit('two');
+    const service = new ReviewInventoryService(root);
+    const result = await service.getSummaryBatch([
+      { branch: 'feature', head, base: 'trunk', publication: null },
+    ]);
+    expect(result[0]?.status).toMatchObject({
+      targetHash: base,
+      uniqueCommits: 2,
+      ahead: null,
+      pushedAhead: null,
+      behind: null,
+    });
+    const zero = await service.getSummaryBatch([
+      { branch: 'trunk', head: base, base: 'feature', publication: null },
+    ]);
+    expect(zero[0]?.status).toMatchObject({ uniqueCommits: 0, targetHash: head });
+  });
+
+  it('does not manufacture a local-only count when no review target can be resolved', async () => {
+    const head = git('rev-parse', 'HEAD');
+    const result = await new ReviewInventoryService(root).getSummaryBatch([
+      { branch: 'trunk', head, publication: null },
+    ]);
+    expect(result[0]?.status).toMatchObject({
+      availability: 'unavailable',
+      uniqueCommits: null,
+      ahead: null,
+    });
+  });
+
   it('batch summaries equal individual calculations for distinct heads, configured mappings, ambiguity and checkout edits', async () => {
     const base = git('rev-parse', 'HEAD');
     git('remote', 'add', 'origin', 'https://github.com/owner/repo.git');
@@ -467,6 +501,14 @@ describe('arbitrary branch review inventory', () => {
     const service = new ReviewInventoryService(root);
     const inventory = await service.getInventory(undefined, false, 'reviewed');
     expect(inventory.baseSuggestion?.ambiguous).toBe(true);
+    const head = git('rev-parse', 'reviewed');
+    const summary = await service.getSummaryBatch([
+      { branch: 'reviewed', head, publication: null },
+    ]);
+    expect(summary[0]?.status).toMatchObject({
+      uniqueCommits: null,
+      baseSuggestion: { ambiguous: true },
+    });
     expect(inventory.target).toBeUndefined();
     expect(inventory.baseSuggestion?.candidates).toEqual(expect.arrayContaining(['left', 'right']));
     expect((await service.getInventory('left', false, 'reviewed')).target).toBe('left');
