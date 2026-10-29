@@ -25,12 +25,14 @@ async function fetchBlobText(
   filePath: string,
   ref: string,
   subject?: ReviewSubject,
+  blobId?: string,
 ): Promise<string | null> {
   try {
     const response = await reviewFetch(
       `/api/blob/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(ref)}`,
       undefined,
       subject,
+      blobId,
     );
     if (!response.ok) return null;
     return await response.text();
@@ -110,14 +112,18 @@ export function useFileLevelTokens({
 
     if (needOld) {
       const oldPath = file.oldPath || file.path;
-      void fetchBlobText(oldPath, baseCommitish as string, reviewSubject).then((text) => {
-        if (!cancelled) setOldContent(text);
-      });
+      void fetchBlobText(oldPath, baseCommitish as string, reviewSubject, file.oldBlobId).then(
+        (text) => {
+          if (!cancelled) setOldContent(text);
+        },
+      );
     }
     if (needNew) {
-      void fetchBlobText(file.path, targetCommitish as string, reviewSubject).then((text) => {
-        if (!cancelled) setNewContent(text);
-      });
+      void fetchBlobText(file.path, targetCommitish as string, reviewSubject, file.newBlobId).then(
+        (text) => {
+          if (!cancelled) setNewContent(text);
+        },
+      );
     }
     return () => {
       cancelled = true;
@@ -132,6 +138,8 @@ export function useFileLevelTokens({
     reloadKey,
     isStdinDiff,
     reviewSubject,
+    file.oldBlobId,
+    file.newBlobId,
   ]);
 
   const oldTokens = useMemo<Token[][] | null>(() => {

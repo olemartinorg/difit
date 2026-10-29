@@ -7,6 +7,7 @@ import { FrontmatterTable } from '../components/FrontmatterTable';
 import { MermaidDiagram } from '../components/MermaidDiagram';
 import { PrismSyntaxHighlighter } from '../components/PrismSyntaxHighlighter';
 import type { MergedChunk } from '../hooks/useExpandedLines';
+import { reviewFetch } from '../services/reviewContext';
 import { extractFrontmatter, getFrontmatterLines } from '../utils/frontmatter';
 import { computeFrontmatterDiff } from '../utils/frontmatterDiff';
 import { extractMarkdownText, isElementWithCodeProps, isSafeUrl } from '../utils/markdownUtils';
@@ -48,7 +49,7 @@ type FenceInfo = {
 
 const isFetchableRef = (ref?: string) => Boolean(ref && ref !== 'stdin');
 
-type PreviewSource = { path: string; ref: string } | null;
+type PreviewSource = { path: string; ref: string; blobId?: string } | null;
 
 type PreviewSourcePair = {
   base: PreviewSource;
@@ -648,13 +649,16 @@ const MarkdownFullPreview = ({
 };
 
 export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
-  const { file, baseCommitish, targetCommitish, mergedChunks, syntaxTheme } = props;
+  const { file, baseCommitish, targetCommitish, mergedChunks, syntaxTheme, reviewSubject } = props;
   const [mode, setMode] = useState<PreviewMode>('diff');
   const [contents, setContents] = useState<PreviewContents>({ base: null, target: null });
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [partialFailureLabel, setPartialFailureLabel] = useState<string | null>(null);
-  const [loadedSourcesKey, setLoadedSourcesKey] = useState<string | null>(null);
+  const [loadedSources, setLoadedSources] = useState<{
+    key: string;
+    subject: DiffViewerBodyProps['reviewSubject'];
+  } | null>(null);
   const previewBlocks = useMemo(() => buildPreviewBlocks(mergedChunks), [mergedChunks]);
   // Frontmatter can only appear in the diff when the first chunk starts at the
   // top of the file; a chunk starting mid-file must be body content even if its
@@ -669,29 +673,41 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
       file.status === 'deleted'
         ? null
         : targetCommitish
-          ? { path: file.path, ref: targetCommitish }
+          ? { path: file.path, ref: targetCommitish, blobId: file.newBlobId }
           : null;
 
     const base: PreviewSource =
       file.status === 'added'
         ? null
         : baseCommitish
-          ? { path: file.oldPath || file.path, ref: baseCommitish }
+          ? { path: file.oldPath || file.path, ref: baseCommitish, blobId: file.oldBlobId }
           : null;
 
     return { base, target };
-  }, [baseCommitish, targetCommitish, file.path, file.oldPath, file.status]);
+  }, [
+    baseCommitish,
+    targetCommitish,
+    file.path,
+    file.oldPath,
+    file.status,
+    file.oldBlobId,
+    file.newBlobId,
+  ]);
 
   const previewSourcesKey = useMemo(() => {
     const baseKey = previewSources.base
-      ? `${previewSources.base.ref}:${previewSources.base.path}`
+      ? `${previewSources.base.ref}:${previewSources.base.path}:${previewSources.base.blobId ?? ''}`
       : '';
     const targetKey = previewSources.target
-      ? `${previewSources.target.ref}:${previewSources.target.path}`
+      ? `${previewSources.target.ref}:${previewSources.target.path}:${previewSources.target.blobId ?? ''}`
       : '';
     if (!baseKey && !targetKey) return null;
     return `${baseKey}|${targetKey}`;
   }, [previewSources]);
+  // A successful diff refresh supplies a new accepted subject, even when this
+  // file and its refs are unchanged. A rejected preview may retry once then.
+  const sourcesLoaded =
+    loadedSources?.key === previewSourcesKey && loadedSources?.subject === reviewSubject;
 
   useEffect(() => {
     const baseSource =
@@ -703,7 +719,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
 
     if (!previewSourcesKey || (!baseSource && !targetSource)) {
       setContents({ base: null, target: null });
-      setLoadedSourcesKey(null);
+      setLoadedSources(null);
       setPreviewError(null);
       setPartialFailureLabel(null);
       setIsPreviewLoading(false);
@@ -715,8 +731,11 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
     const fetchBlob = async (source: PreviewSource): Promise<string | null> => {
       if (!source) return null;
       const encodedPath = encodeURIComponent(source.path);
-      const response = await fetch(
+      const response = await reviewFetch(
         `/api/blob/${encodedPath}?ref=${encodeURIComponent(source.ref)}`,
+        undefined,
+        reviewSubject,
+        source.blobId,
       );
       if (!response.ok) {
         throw new Error(`Failed to fetch preview: ${response.statusText}`);
@@ -725,7 +744,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
     };
 
     const run = async () => {
-      if (previewSourcesKey !== loadedSourcesKey) {
+      if (!sourcesLoaded) {
         setContents({ base: null, target: null });
       }
       setIsPreviewLoading(true);
@@ -756,7 +775,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
       }
 
       setContents({ base: nextBase, target: nextTarget });
-      setLoadedSourcesKey(previewSourcesKey);
+      setLoadedSources({ key: previewSourcesKey, subject: reviewSubject });
 
       const baseFailed = baseSource !== null && baseResult.status === 'rejected';
       const targetFailed = targetSource !== null && targetResult.status === 'rejected';
@@ -780,9 +799,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
       setIsPreviewLoading(false);
     };
 
-    const relevantContent = file.status === 'deleted' ? contents.base : contents.target;
-
-    if (previewSourcesKey !== loadedSourcesKey || relevantContent === null) {
+    if (!sourcesLoaded) {
       void run();
     } else {
       setIsPreviewLoading(false);
@@ -791,14 +808,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
     return () => {
       isCanceled = true;
     };
-  }, [
-    contents.base,
-    contents.target,
-    file.status,
-    loadedSourcesKey,
-    previewSources,
-    previewSourcesKey,
-  ]);
+  }, [file.status, previewSources, previewSourcesKey, reviewSubject, sourcesLoaded]);
 
   const fullPreviewContent = useMemo(
     () => (file.status === 'deleted' ? contents.base : contents.target),
@@ -806,8 +816,8 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
   );
 
   const hasFullPreview = useMemo(
-    () => previewSourcesKey === loadedSourcesKey && fullPreviewContent !== null,
-    [fullPreviewContent, loadedSourcesKey, previewSourcesKey],
+    () => sourcesLoaded && fullPreviewContent !== null,
+    [fullPreviewContent, sourcesLoaded],
   );
 
   useEffect(() => {

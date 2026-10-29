@@ -1,5 +1,5 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
-import { isAbsolute, resolve, sep } from 'path';
+import { dirname, isAbsolute, resolve, sep } from 'path';
 
 import { validateDiffArguments, shortHash, createCommitRangeString } from '../cli/utils.js';
 import {
@@ -12,6 +12,7 @@ import {
 import { getMergeBaseTargetRef, normalizeBaseMode } from '../utils/diffSelection.js';
 
 import { isGeneratedFile } from './generated-file-check.js';
+import { ReviewReadChangedError } from './review-identity.js';
 
 export class GitDiffParser {
   private git: SimpleGit;
@@ -84,6 +85,7 @@ export class GitDiffParser {
         // Show unstaged changes (working vs staged)
         resolvedCommit = 'Working Directory (unstaged changes)';
         diffArgs = [];
+        resolvedBaseCommitish = 'staged';
       } else if (targetCommitish === 'staged') {
         // Show staged changes against base commit
         const baseHash = await this.git.revparse([effectiveBaseCommitish]);
@@ -117,7 +119,7 @@ export class GitDiffParser {
 
       // Ignore external diff-tools to unify output.
       // https://github.com/yoshiko-pg/difit/issues/19
-      diffArgs.push('--no-ext-diff', '--color=never');
+      diffArgs.push('--full-index', '--no-ext-diff', '--color=never');
 
       // Single git invocation for better startup latency on large repositories.
       const diffRaw = await this.git.diff(diffArgs);
@@ -125,6 +127,43 @@ export class GitDiffParser {
         this.parseUnifiedDiff(diffRaw),
         attributesRef,
       );
+      for (const file of files) {
+        if (file.status !== 'deleted' && ['.', 'working'].includes(targetCommitish)) {
+          const { lstatSync } = await import('fs');
+          // Gitlinks render their native subproject-commit hunk. They are not
+          // regular blobs and must not make an otherwise valid review fail.
+          if (lstatSync(resolve(this.repoPath, file.path)).isDirectory()) continue;
+        }
+        // A patch without an index header has identical old/new blob content
+        // (mode-only changes or a pure rename). Its new side must still match
+        // that old identity; reading a newer body cannot add it to this patch.
+        if (!file.chunks.length && file.status !== 'added' && !file.oldBlobId)
+          file.oldBlobId = await this.getBlobId(
+            file.oldPath ?? file.path,
+            targetCommitish === 'working' ? 'staged' : resolvedBaseCommitish,
+          );
+        if (file.status !== 'deleted' && ['.', 'working'].includes(targetCommitish)) {
+          const content = await this.readBlobContent(file.path, targetCommitish);
+          const expectedBlobId = file.newBlobId ?? file.oldBlobId;
+          if (
+            expectedBlobId &&
+            (await this.getBlobId(file.path, targetCommitish, content, true)) !== expectedBlobId
+          )
+            throw new ReviewReadChangedError(
+              'The file changed during the diff read. Refresh to read its current content.',
+            );
+          // Native patches use cleaned Git bytes. Bind previews to the exact
+          // working bytes accepted with that patch, including filters/CRLF.
+          file.newBlobId = await this.getBlobId(file.path, targetCommitish, content);
+        } else if (!file.chunks.length && file.status !== 'deleted' && !file.newBlobId) {
+          const content = await this.getBlobContent(
+            file.path,
+            resolvedTargetCommitish,
+            file.oldBlobId,
+          );
+          file.newBlobId = await this.getBlobId(file.path, resolvedTargetCommitish, content);
+        }
+      }
 
       return {
         commit: resolvedCommit,
@@ -137,6 +176,7 @@ export class GitDiffParser {
         requestedBaseMode,
       };
     } catch (error) {
+      if (error instanceof ReviewReadChangedError) throw error;
       throw new Error(
         `Failed to parse diff for ${targetCommitish} vs ${baseCommitish}: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
@@ -509,12 +549,17 @@ export class GitDiffParser {
     const chunks = this.parseChunks(lines);
 
     const { additions, deletions } = this.countLinesFromChunks(chunks);
+    const index = lines.find((line) => /^index [a-f0-9]+\.\.[a-f0-9]+/.test(line));
+    const blobs = index?.match(
+      /^index ([a-f0-9]{40}|[a-f0-9]{64})\.\.([a-f0-9]{40}|[a-f0-9]{64})(?: |$)/,
+    );
     return {
       ...baseFile,
       additions,
       deletions,
       chunks,
       isGenerated: isGeneratedFile(path).isGenerated,
+      ...(blobs ? { oldBlobId: blobs[1], newBlobId: blobs[2] } : {}),
     };
   }
 
@@ -615,7 +660,31 @@ export class GitDiffParser {
     };
   }
 
-  async getBlobContent(filepath: string, ref: string): Promise<Buffer> {
+  async getBlobId(
+    filepath: string,
+    ref: string,
+    content?: Buffer,
+    applyFilters = false,
+  ): Promise<string> {
+    const { execFileSync } = await import('child_process');
+    const buffer = content ?? (await this.readBlobContent(filepath, ref));
+    return execFileSync(
+      'git',
+      ['hash-object', '--stdin', ...(applyFilters ? [`--path=${filepath}`] : ['--no-filters'])],
+      { cwd: this.repoPath, input: buffer, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+    ).trim();
+  }
+
+  async getBlobContent(filepath: string, ref: string, expectedBlobId?: string): Promise<Buffer> {
+    const buffer = await this.readBlobContent(filepath, ref);
+    if (expectedBlobId && (await this.getBlobId(filepath, ref, buffer)) !== expectedBlobId)
+      throw new ReviewReadChangedError(
+        'The file changed since the displayed diff. Refresh to read its current content.',
+      );
+    return buffer;
+  }
+
+  private async readBlobContent(filepath: string, ref: string): Promise<Buffer> {
     try {
       // For working directory, read directly from filesystem
       if (ref === 'working' || ref === '.') {
@@ -626,7 +695,13 @@ export class GitDiffParser {
 
         const repositoryPath = fs.realpathSync(resolve(this.repoPath));
         const repositoryRoot = `${repositoryPath}${sep}`;
-        const absolutePath = fs.realpathSync(resolve(repositoryRoot, filepath.replace(/\\/g, '/')));
+        const entryPath = resolve(repositoryRoot, this.normalizeRepositoryRelativePath(filepath));
+        const parent = fs.realpathSync(dirname(entryPath));
+        if (parent !== repositoryPath && !parent.startsWith(repositoryRoot))
+          throw new Error('File path outside repository');
+        if (fs.lstatSync(entryPath).isSymbolicLink())
+          return Buffer.from(fs.readlinkSync(entryPath));
+        const absolutePath = fs.realpathSync(entryPath);
 
         if (!absolutePath.startsWith(repositoryRoot)) {
           throw new Error('File path outside repository');
@@ -646,6 +721,7 @@ export class GitDiffParser {
         // For staged files, use git show :filepath
         // Using execFileSync to prevent command injection
         const buffer = execFileSync('git', ['show', `:${normalizedFilepath}`], {
+          cwd: this.repoPath,
           maxBuffer: 10 * 1024 * 1024, // 10MB limit
         });
         return buffer;
@@ -654,6 +730,7 @@ export class GitDiffParser {
       // First, get the blob hash for the file at the given ref
       // Using execFileSync to prevent command injection
       const blobHash = execFileSync('git', ['rev-parse', `${ref}:${normalizedFilepath}`], {
+        cwd: this.repoPath,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
       }).trim();
@@ -661,6 +738,7 @@ export class GitDiffParser {
       // Then use git cat-file to get the raw binary content
       // Increase maxBuffer to handle large files (default is 1024*1024 = 1MB)
       const buffer = execFileSync('git', ['cat-file', 'blob', blobHash], {
+        cwd: this.repoPath,
         maxBuffer: 10 * 1024 * 1024, // 10MB limit
       });
 
@@ -687,8 +765,8 @@ export class GitDiffParser {
     }
   }
 
-  async getLineCount(filepath: string, ref: string): Promise<number> {
-    const buffer = await this.getBlobContent(filepath, ref);
+  async getLineCount(filepath: string, ref: string, expectedBlobId?: string): Promise<number> {
+    const buffer = await this.getBlobContent(filepath, ref, expectedBlobId);
     let count = 0;
     for (let i = 0; i < buffer.length; i++) {
       if (buffer[i] === 0x0a) count++; // newline byte
@@ -708,7 +786,11 @@ export class GitDiffParser {
   async getGeneratedStatus(
     filepath: string,
     ref: string,
+    expectedBlobId?: string,
   ): Promise<{ isGenerated: boolean; source: 'path' | 'content' }> {
+    const acceptedContent = expectedBlobId
+      ? await this.getBlobContent(filepath, ref, expectedBlobId)
+      : undefined;
     const pathResult = isGeneratedFile(filepath);
     if (pathResult.isGenerated) {
       return { isGenerated: true, source: 'path' };
@@ -720,7 +802,7 @@ export class GitDiffParser {
     }
 
     try {
-      const buffer = await this.getBlobContent(filepath, ref);
+      const buffer = acceptedContent ?? (await this.getBlobContent(filepath, ref));
       const lines = this.extractHeaderLines(buffer);
       const result = isGeneratedFile(filepath, () => lines);
       return { isGenerated: result.isGenerated, source: 'content' };

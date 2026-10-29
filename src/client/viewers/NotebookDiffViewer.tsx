@@ -487,12 +487,14 @@ const fetchNotebookContent = async (
   filePath: string,
   ref: string,
   subject?: ReviewSubject,
+  blobId?: string,
 ): Promise<string | null> => {
   const encodedPath = encodeURIComponent(filePath);
   const response = await reviewFetch(
     `/api/blob/${encodedPath}?ref=${encodeURIComponent(ref)}`,
     undefined,
     subject,
+    blobId,
   );
   if (!response.ok) return null;
   return response.text();
@@ -989,22 +991,39 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
     if (!baseCommitish && !targetCommitish) return null;
 
     if (file.status === 'added') {
-      return targetCommitish ? { path: file.path, ref: targetCommitish } : null;
+      return targetCommitish
+        ? { path: file.path, ref: targetCommitish, blobId: file.newBlobId }
+        : null;
     }
 
     if (file.status === 'deleted') {
-      return baseCommitish ? { path: file.oldPath || file.path, ref: baseCommitish } : null;
+      return baseCommitish
+        ? { path: file.oldPath || file.path, ref: baseCommitish, blobId: file.oldBlobId }
+        : null;
     }
 
     if (targetCommitish) {
-      return { path: file.path, ref: targetCommitish };
+      return { path: file.path, ref: targetCommitish, blobId: file.newBlobId };
     }
 
-    return baseCommitish ? { path: file.oldPath || file.path, ref: baseCommitish } : null;
-  }, [baseCommitish, targetCommitish, file.oldPath, file.path, file.status]);
+    return baseCommitish
+      ? { path: file.oldPath || file.path, ref: baseCommitish, blobId: file.oldBlobId }
+      : null;
+  }, [
+    baseCommitish,
+    targetCommitish,
+    file.oldPath,
+    file.path,
+    file.status,
+    file.oldBlobId,
+    file.newBlobId,
+  ]);
 
   const previewSourceKey = useMemo(
-    () => (previewSource ? `${previewSource.ref}:${previewSource.path}` : null),
+    () =>
+      previewSource
+        ? `${previewSource.ref}:${previewSource.path}:${previewSource.blobId ?? ''}`
+        : null,
     [previewSource],
   );
 
@@ -1051,10 +1070,10 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
       try {
         const [oldText, newText] = await Promise.all([
           canFetchOld
-            ? fetchNotebookContent(oldPath, baseRef, reviewSubject)
+            ? fetchNotebookContent(oldPath, baseRef, reviewSubject, file.oldBlobId)
             : Promise.resolve(null),
           canFetchNew
-            ? fetchNotebookContent(file.path, targetRef, reviewSubject)
+            ? fetchNotebookContent(file.path, targetRef, reviewSubject, file.newBlobId)
             : Promise.resolve(null),
         ]);
 
@@ -1137,6 +1156,8 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
     targetCommitish,
     fallbackPreview,
     reviewSubject,
+    file.oldBlobId,
+    file.newBlobId,
   ]);
 
   useEffect(() => {
@@ -1165,6 +1186,7 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
           previewSource.path,
           previewSource.ref,
           reviewSubject,
+          previewSource.blobId,
         );
         if (!text) {
           throw new Error('Failed to load preview.');

@@ -289,13 +289,18 @@ export function useLazyDiffRendering({
       generatedStatusCheckedRef.current.add(cacheKey);
 
       const encodedPath = encodeURIComponent(file.path);
-      reviewFetch(`/api/generated-status/${encodedPath}?ref=${encodeURIComponent(ref)}`)
+      reviewFetch(
+        `/api/generated-status/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+        undefined,
+        diffData.reviewSubject,
+        file.newBlobId,
+      )
         .then((res) => (res.ok ? res.json() : null))
         .then((payload: { isGenerated?: unknown } | null) => {
           if (!payload || payload.isGenerated !== true) return;
 
           setDiffData((prev) => {
-            if (!prev) return prev;
+            if (!prev || prev !== diffData) return prev;
             if (
               prev.requestedBaseCommitish !== diffData.requestedBaseCommitish ||
               prev.requestedTargetCommitish !== diffData.requestedTargetCommitish ||

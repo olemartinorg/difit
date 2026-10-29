@@ -32,6 +32,8 @@ vi.mock('fs', async (importOriginal) => {
   return {
     ...actual,
     readFileSync: vi.fn(),
+    readlinkSync: vi.fn(),
+    lstatSync: vi.fn(() => ({ isDirectory: () => false, isSymbolicLink: () => false })),
     realpathSync: vi.fn((path: string) => path),
   };
 });
@@ -87,6 +89,7 @@ describe('GitDiffParser', () => {
       const result = await parser.getBlobContent('test.txt', 'staged');
 
       expect(mockExecFileSync).toHaveBeenCalledWith('git', ['show', ':test.txt'], {
+        cwd: TEST_REPO_PATH,
         maxBuffer: 10 * 1024 * 1024,
       });
       expect(result).toBe(mockBuffer);
@@ -103,10 +106,12 @@ describe('GitDiffParser', () => {
       const result = await parser.getBlobContent('test.txt', 'HEAD');
 
       expect(mockExecFileSync).toHaveBeenCalledWith('git', ['rev-parse', 'HEAD:test.txt'], {
+        cwd: TEST_REPO_PATH,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
       });
       expect(mockExecFileSync).toHaveBeenCalledWith('git', ['cat-file', 'blob', blobHash], {
+        cwd: TEST_REPO_PATH,
         maxBuffer: 10 * 1024 * 1024,
       });
       expect(result).toBe(mockBuffer);
@@ -161,15 +166,15 @@ describe('GitDiffParser', () => {
       expect(mockReadFileSync).not.toHaveBeenCalled();
     });
 
-    it('rejects working tree symlinks that resolve outside the repository', async () => {
+    it('rejects working tree paths whose parent resolves outside the repository', async () => {
       mockRealpathSync.mockImplementation((path: string) => {
-        if (path === resolve(TEST_REPO_PATH, 'link.txt')) {
-          return '/etc/passwd';
+        if (path === resolve(TEST_REPO_PATH, 'links')) {
+          return '/etc';
         }
         return path;
       });
 
-      await expect(parser.getBlobContent('link.txt', 'working')).rejects.toThrow(
+      await expect(parser.getBlobContent('links/file.txt', 'working')).rejects.toThrow(
         'File path outside repository',
       );
 
@@ -1516,6 +1521,7 @@ index abc123..def456 100644
         'abcdef1234567890abcdef1234567890abcdef12',
         '1234567890abcdef1234567890abcdef12345678',
         '-U5',
+        '--full-index',
         '--no-ext-diff',
         '--color=never',
       ]);
@@ -1550,6 +1556,7 @@ index abc123..def456 100644
       expect(gitDiff).toHaveBeenCalledWith([
         'abcdef1234567890abcdef1234567890abcdef12',
         '1234567890abcdef1234567890abcdef12345678',
+        '--full-index',
         '--no-ext-diff',
         '--color=never',
       ]);
@@ -1583,6 +1590,7 @@ index abc123..def456 100644
       expect(gitRaw).toHaveBeenCalledWith(['merge-base', 'HEAD', 'origin/main']);
       expect(gitDiff).toHaveBeenCalledWith([
         'fedcba9876543210fedcba9876543210fedcba98',
+        '--full-index',
         '--no-ext-diff',
         '--color=never',
       ]);

@@ -31,6 +31,7 @@ describe('ImageDiffViewer', () => {
       .__DIFIT_STATIC_BLOB_URLS__;
     // Mock fetch to return a blob with size
     (global.fetch as any).mockResolvedValue({
+      ok: true,
       blob: () => Promise.resolve({ size: 1024 }),
     });
   });
@@ -50,7 +51,7 @@ describe('ImageDiffViewer', () => {
 
       expect(screen.getByText('Deleted Image')).toBeInTheDocument();
       expect(screen.getByText('Previous version:')).toBeInTheDocument();
-      expect(screen.getByRole('img')).toHaveAttribute('src', '/api/blob/test.jpg?ref=HEAD~1');
+      expect(screen.getByRole('img')).toHaveAttribute('src', '/api/blob/test.jpg?ref=HEAD%7E1');
     });
 
     it('renders added image correctly', () => {
@@ -104,7 +105,7 @@ describe('ImageDiffViewer', () => {
       expect(screen.getByText('Modified Image')).toBeInTheDocument();
 
       const images = screen.getAllByRole('img');
-      expect(images[0]).toHaveAttribute('src', '/api/blob/old-name.jpg?ref=HEAD~1');
+      expect(images[0]).toHaveAttribute('src', '/api/blob/old-name.jpg?ref=HEAD%7E1');
       expect(images[1]).toHaveAttribute('src', '/api/blob/new-name.jpg?ref=HEAD');
     });
   });
@@ -140,7 +141,7 @@ describe('ImageDiffViewer', () => {
       renderViewer(file);
 
       const images = screen.getAllByRole('img');
-      expect(images[0]).toHaveAttribute('src', '/api/blob/old-test.jpg?ref=HEAD~1');
+      expect(images[0]).toHaveAttribute('src', '/api/blob/old-test.jpg?ref=HEAD%7E1');
       expect(images[1]).toHaveAttribute('src', '/api/blob/test.jpg?ref=HEAD');
     });
 

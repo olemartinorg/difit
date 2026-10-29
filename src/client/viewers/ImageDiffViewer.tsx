@@ -1,6 +1,8 @@
 import { useState } from 'react';
 
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
+import { reviewURL } from '../services/reviewContext';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 
 import type { DiffViewerBodyProps } from './types';
 
@@ -16,9 +18,22 @@ interface StaticBlobWindow {
 
 const blobKey = (ref: string, path: string): string => `${ref.slice(0, 7)}:${path}`;
 
-const imageBlobUrl = (path: string, ref: string): string => {
+const imageBlobUrl = (
+  path: string,
+  ref: string,
+  subject?: ReviewSubject,
+  blobId?: string,
+): string => {
   const staticBlobUrls = (window as Window & StaticBlobWindow).__DIFIT_STATIC_BLOB_URLS__;
-  return staticBlobUrls?.[blobKey(ref, path)] ?? `/api/blob/${path}?ref=${ref}`;
+  return (
+    staticBlobUrls?.[blobKey(ref, path)] ??
+    reviewURL(
+      `/api/blob/${encodeURIComponent(path)}`,
+      new URLSearchParams({ ref }),
+      subject,
+      blobId,
+    )
+  );
 };
 
 export function ImageDiffViewer({
@@ -26,6 +41,7 @@ export function ImageDiffViewer({
   diffMode,
   baseCommitish,
   targetCommitish,
+  reviewSubject,
 }: DiffViewerBodyProps) {
   const mode = diffMode ?? DEFAULT_DIFF_VIEW_MODE;
   const isDeleted = file.status === 'deleted';
@@ -45,6 +61,10 @@ export function ImageDiffViewer({
     img: HTMLImageElement,
     setImageInfo: (info: ImageInfo) => void,
   ) => {
+    // React retains this image across accepted revisions. A previous rejected
+    // request must not keep a successfully loaded replacement hidden.
+    img.style.display = '';
+    img.nextElementSibling?.classList.add('hidden');
     try {
       // Get image dimensions
       const width = img.naturalWidth;
@@ -52,6 +72,7 @@ export function ImageDiffViewer({
 
       // Fetch the image to get file size
       const response = await fetch(img.src);
+      if (!response.ok) throw new Error('Image content is no longer available');
       const blob = await response.blob();
       const size = blob.size;
 
@@ -99,7 +120,7 @@ export function ImageDiffViewer({
               Previous version:
             </div>
             <img
-              src={imageBlobUrl(file.oldPath || file.path, baseRef)}
+              src={imageBlobUrl(file.oldPath || file.path, baseRef, reviewSubject, file.oldBlobId)}
               alt={`Previous version of ${file.oldPath || file.path}`}
               className="max-w-full max-h-96 border border-github-border rounded mx-auto"
               style={checkerboardStyle}
@@ -139,7 +160,7 @@ export function ImageDiffViewer({
               New file:
             </div>
             <img
-              src={imageBlobUrl(file.path, targetRef)}
+              src={imageBlobUrl(file.path, targetRef, reviewSubject, file.newBlobId)}
               alt={`New image ${file.path}`}
               className="max-w-full max-h-96 border border-github-border rounded mx-auto"
               style={checkerboardStyle}
@@ -182,7 +203,12 @@ export function ImageDiffViewer({
                   Previous version:
                 </div>
                 <img
-                  src={imageBlobUrl(file.oldPath || file.path, baseRef)}
+                  src={imageBlobUrl(
+                    file.oldPath || file.path,
+                    baseRef,
+                    reviewSubject,
+                    file.oldBlobId,
+                  )}
                   alt={`Previous version of ${file.oldPath || file.path}`}
                   className="max-w-full max-h-96 border border-github-border rounded mx-auto"
                   style={checkerboardStyle}
@@ -213,7 +239,7 @@ export function ImageDiffViewer({
                   Current version:
                 </div>
                 <img
-                  src={imageBlobUrl(file.path, targetRef)}
+                  src={imageBlobUrl(file.path, targetRef, reviewSubject, file.newBlobId)}
                   alt={`Current version of ${file.path}`}
                   className="max-w-full max-h-96 border border-github-border rounded mx-auto"
                   style={checkerboardStyle}
@@ -254,7 +280,12 @@ export function ImageDiffViewer({
                   Previous version:
                 </div>
                 <img
-                  src={imageBlobUrl(file.oldPath || file.path, baseRef)}
+                  src={imageBlobUrl(
+                    file.oldPath || file.path,
+                    baseRef,
+                    reviewSubject,
+                    file.oldBlobId,
+                  )}
                   alt={`Previous version of ${file.oldPath || file.path}`}
                   className="max-w-full max-h-96 border border-github-border rounded mx-auto"
                   style={checkerboardStyle}
@@ -285,7 +316,7 @@ export function ImageDiffViewer({
                   Current version:
                 </div>
                 <img
-                  src={imageBlobUrl(file.path, targetRef)}
+                  src={imageBlobUrl(file.path, targetRef, reviewSubject, file.newBlobId)}
                   alt={`Current version of ${file.path}`}
                   className="max-w-full max-h-96 border border-github-border rounded mx-auto"
                   style={checkerboardStyle}

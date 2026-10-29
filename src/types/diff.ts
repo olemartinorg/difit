@@ -6,6 +6,8 @@ export interface DiffFile {
   deletions: number;
   chunks: DiffChunk[];
   isGenerated?: boolean;
+  oldBlobId?: string;
+  newBlobId?: string;
 }
 
 export interface DiffChunk {

@@ -11,7 +11,7 @@ import { GitDiffParser } from './git-diff.js';
 
 type UntrackedDiffFile = DiffFile & { binary?: boolean };
 
-// Keep the upstream parser unchanged; local review adds read-only untracked files.
+// Local review adds read-only untracked files to the native parser.
 export class ReviewDiffParser extends GitDiffParser {
   private readonly reviewGit;
 
@@ -47,6 +47,7 @@ export class ReviewDiffParser extends GitDiffParser {
           const content = info.isSymbolicLink()
             ? Buffer.from(await readlink(absolute))
             : await readFile(absolute);
+          const newBlobId = await this.getBlobId(path, '.', content);
           if (content.includes(0)) {
             return {
               path,
@@ -55,6 +56,7 @@ export class ReviewDiffParser extends GitDiffParser {
               deletions: 0,
               chunks: [],
               binary: true,
+              newBlobId,
             };
           }
           const patch = createTwoFilesPatch(
@@ -66,15 +68,16 @@ export class ReviewDiffParser extends GitDiffParser {
             '',
             { context: contextLines },
           );
-          return (
-            this.parseStdinDiff(patch).files[0] ?? {
+          return {
+            ...(this.parseStdinDiff(patch).files[0] ?? {
               path,
               status: 'added',
               additions: 0,
               deletions: 0,
               chunks: [],
-            }
-          );
+            }),
+            newBlobId,
+          };
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
           throw error;

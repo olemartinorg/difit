@@ -5,9 +5,16 @@ import type { ReviewSubject } from '../../types/reviewSubmission';
 // the compared range without changing that logical review.
 const context = new URLSearchParams(window.location.search);
 
-export function reviewURL(path: string, parameters?: URLSearchParams): string {
+export function reviewURL(
+  path: string,
+  parameters?: URLSearchParams,
+  subject?: ReviewSubject,
+  blobId?: string,
+): string {
   const url = new URL(path, window.location.origin);
   for (const [key, value] of parameters ?? []) url.searchParams.set(key, value);
+  if (subject) url.searchParams.set('reviewSubject', JSON.stringify(subject));
+  if (blobId) url.searchParams.set('blobId', blobId);
   for (const key of ['reviewBranch', 'reviewSubject', 'reviewId']) {
     const value = context.get(key);
     if (value && !url.searchParams.has(key)) url.searchParams.set(key, value);
@@ -39,10 +46,9 @@ export async function reviewFetch(
   path: string,
   init?: RequestInit,
   subject?: ReviewSubject,
+  blobId?: string,
 ): Promise<Response> {
-  const parameters = new URLSearchParams();
-  if (subject) parameters.set('reviewSubject', JSON.stringify(subject));
-  const url = reviewURL(path, parameters);
+  const url = reviewURL(path, undefined, subject, blobId);
   const refresh = ['/api/diff', '/api/review'].includes(
     new URL(url, window.location.origin).pathname,
   );

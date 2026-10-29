@@ -13,7 +13,7 @@ import { type Server } from 'http';
 import { join, dirname, isAbsolute, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
-import express, { type Express } from 'express';
+import express, { type Express, type Request } from 'express';
 import open from 'open';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -138,6 +138,18 @@ export async function startServer(
   >();
   const diffDataCache = new Map<string, DiffResponse>();
   const initialIgnoreWhitespace = options.ignoreWhitespace || false;
+  const acceptedBlobId = (req: Request, ref: string, key = 'blobId') => {
+    const value = req.query[key];
+    if (typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) return value;
+    if (
+      value !== undefined ||
+      (req.query.reviewSubject && ['.', 'working', 'staged'].includes(ref))
+    )
+      throw new ReviewReadChangedError(
+        'The displayed file content identity is unavailable. Refresh before reading current content.',
+      );
+    return undefined;
+  };
   const parseBaseMode = (value: unknown): BaseMode | undefined => {
     if (value === 'merge-base') {
       return 'merge-base';
@@ -345,8 +357,9 @@ export async function startServer(
           );
         } catch (error) {
           console.error('Error fetching diff:', error);
-          res.status(500).json({
+          res.status(error instanceof ReviewReadChangedError ? 409 : 500).json({
             error: error instanceof Error ? error.message : 'Failed to fetch diff',
+            ...(error instanceof ReviewReadChangedError ? { code: error.code } : {}),
           });
           return;
         }
@@ -412,15 +425,16 @@ export async function startServer(
       const normalizedFilepath = filepathResult.path;
 
       const ref = (req.query.ref as string) || currentSelection.targetCommitish || 'HEAD';
-      const cacheKey = `${ref}:${normalizedFilepath}`;
+      const blobId = acceptedBlobId(req, ref);
+      const cacheKey = `${ref}:${blobId ?? ''}:${normalizedFilepath}`;
       const now = Date.now();
       const cached = generatedStatusCache.get(cacheKey);
-      if (cached && cached.expiresAt > now) {
+      if (cached && cached.expiresAt > now && !['.', 'working', 'staged'].includes(ref)) {
         res.json(cached.value);
         return;
       }
 
-      const status = await parser.getGeneratedStatus(normalizedFilepath, ref);
+      const status = await parser.getGeneratedStatus(normalizedFilepath, ref, blobId);
       const response: GeneratedStatusResponse = {
         path: normalizedFilepath,
         ref,
@@ -433,6 +447,10 @@ export async function startServer(
 
       res.json(response);
     } catch (error) {
+      if (error instanceof ReviewReadChangedError) {
+        res.status(409).json({ error: error.message, code: error.code });
+        return;
+      }
       console.error('Error fetching generated status:', error);
       res.status(500).json({ error: 'Failed to get generated status' });
     }
@@ -501,22 +519,30 @@ export async function startServer(
       const result: { oldLineCount?: number; newLineCount?: number } = {};
 
       if (oldRef) {
+        const blobId = acceptedBlobId(req, oldRef, 'oldBlobId');
         try {
-          result.oldLineCount = await parser.getLineCount(oldPath, oldRef);
-        } catch {
+          result.oldLineCount = await parser.getLineCount(oldPath, oldRef, blobId);
+        } catch (error) {
+          if (blobId || error instanceof ReviewReadChangedError) throw error;
           result.oldLineCount = 0;
         }
       }
       if (newRef) {
+        const blobId = acceptedBlobId(req, newRef, 'newBlobId');
         try {
-          result.newLineCount = await parser.getLineCount(filepath, newRef);
-        } catch {
+          result.newLineCount = await parser.getLineCount(filepath, newRef, blobId);
+        } catch (error) {
+          if (blobId || error instanceof ReviewReadChangedError) throw error;
           result.newLineCount = 0;
         }
       }
 
       res.json(result);
     } catch (error) {
+      if (error instanceof ReviewReadChangedError) {
+        res.status(409).json({ error: error.message, code: error.code });
+        return;
+      }
       console.error('Error fetching line count:', error);
       res.status(500).json({ error: 'Failed to get line count' });
     }
@@ -538,7 +564,7 @@ export async function startServer(
       const filepath = filepathResult.path;
       const ref = (req.query.ref as string) || 'HEAD';
 
-      const blob = await parser.getBlobContent(filepath, ref);
+      const blob = await parser.getBlobContent(filepath, ref, acceptedBlobId(req, ref));
 
       // Determine content type based on file extension
       const ext = getFileExtension(filepath);
@@ -566,6 +592,10 @@ export async function startServer(
       res.setHeader('Expires', '0');
       res.send(blob);
     } catch (error) {
+      if (error instanceof ReviewReadChangedError) {
+        res.status(409).json({ error: error.message, code: error.code });
+        return;
+      }
       console.error('Error fetching blob:', error);
       res.status(404).json({ error: 'File not found' });
     }

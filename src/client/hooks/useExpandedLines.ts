@@ -52,12 +52,14 @@ async function fetchFileContent(
   filePath: string,
   commitish: string,
   subject?: ReviewSubject,
+  blobId?: string,
 ): Promise<{ lines: string[]; totalLines: number }> {
   const encodedPath = encodeURIComponent(filePath);
   const response = await reviewFetch(
     `/api/blob/${encodedPath}?ref=${encodeURIComponent(commitish)}`,
     undefined,
     subject,
+    blobId,
   );
 
   if (!response.ok) {
@@ -79,12 +81,16 @@ async function fetchLineCount(
   newRef?: string,
   oldPath?: string,
   subject?: ReviewSubject,
+  oldBlobId?: string,
+  newBlobId?: string,
 ): Promise<{ oldLineCount?: number; newLineCount?: number }> {
   const encodedPath = encodeURIComponent(filePath);
   const params = new URLSearchParams();
   if (oldRef) params.set('oldRef', oldRef);
   if (newRef) params.set('newRef', newRef);
   if (oldPath && oldPath !== filePath) params.set('oldPath', oldPath);
+  if (oldBlobId) params.set('oldBlobId', oldBlobId);
+  if (newBlobId) params.set('newBlobId', newBlobId);
 
   const response = await reviewFetch(
     `/api/line-count/${encodedPath}?${params}`,
@@ -176,6 +182,7 @@ export function useExpandedLines({
               oldPath,
               baseCommitish,
               reviewSubject,
+              file.oldBlobId,
             );
             if (revisionGenerationRef.current !== revisionGeneration) {
               return null;
@@ -195,6 +202,7 @@ export function useExpandedLines({
               file.path,
               targetCommitish,
               reviewSubject,
+              file.newBlobId,
             );
             if (revisionGenerationRef.current !== revisionGeneration) {
               return null;
@@ -400,6 +408,8 @@ export function useExpandedLines({
           newRef,
           file.oldPath,
           reviewSubject,
+          file.oldBlobId,
+          file.newBlobId,
         );
         if (revisionGenerationRef.current !== revisionGeneration) {
           return;
