@@ -162,6 +162,64 @@ describe('scoped review target API', () => {
     expect(readFileSync(join(root, '.git', 'index'))).toEqual(index);
   });
 
+  it('admits commits, amendments and rewritten HEAD on the same live branch while preserving the captured PR base', async () => {
+    const f = await fixture();
+    git('checkout', '-q', 'feature');
+    const subject = { ...f.subject, checkout: { branch: 'feature', head: f.head } };
+    const query = new URLSearchParams({
+      reviewBranch: 'feature',
+      reviewSubject: JSON.stringify(subject),
+    });
+    const read = async () => {
+      const response = await fetch(`${f.origin}/api/review?${query}`);
+      expect(response.status).toBe(200);
+      return (await response.json()) as ReviewInventory;
+    };
+    for (const change of ['commit', 'amend', 'rewrite']) {
+      if (change === 'rewrite') git('reset', '--soft', f.base);
+      if (change === 'amend') git('commit', '--amend', '--allow-empty', '-qm', 'amended live work');
+      else commit(`${change}-live.txt`);
+      const current = git('rev-parse', 'HEAD');
+      const inventory = await read();
+      expect(inventory.head).toBe(current);
+      expect(inventory.target).toBe(f.declaredBase);
+      expect(inventory.checkout).toBe(true);
+      expect(inventory.commits[0]?.hash).toBe(current);
+    }
+    // A historical document keeps its intentional revision despite live changes.
+    expect((await f.inventory()).head).toBe(f.head);
+    git('checkout', '-qb', 'another-branch');
+    expect((await fetch(`${f.origin}/api/review?${query}`)).status).toBe(400);
+  });
+
+  it('keeps existing captured PR target preference keys while live HEAD advances', async () => {
+    const f = await fixture();
+    git('checkout', '-q', 'feature');
+    const subject = { ...f.subject, checkout: { branch: 'feature', head: f.head } };
+    const query = new URLSearchParams({
+      reviewBranch: 'feature',
+      reviewSubject: JSON.stringify(subject),
+    });
+    const key = `${repositoryId}:feature:fixture/repo:${f.head}:${subject.pullRequest!.url}:${f.declaredBase}`;
+    await updateUserClientSettings({ reviewTargets: { [key]: 'stacked-parent' } });
+    commit('advanced-preferences.txt');
+    const loaded = await fetch(`${f.origin}/api/review?${query}`);
+    expect(loaded.status).toBe(200);
+    expect(await loaded.json()).toMatchObject({
+      target: 'stacked-parent',
+      head: git('rev-parse', 'HEAD'),
+    });
+    const saved = await fetch(`${f.origin}/api/review/target?${query}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'declared-target' }),
+    });
+    expect(saved.status).toBe(200);
+    const targets = (await readUserConfig()).client.reviewTargets as Record<string, string>;
+    expect(targets[key]).toBe('declared-target');
+    expect(Object.keys(targets)).toEqual([key]);
+  });
+
   it('fences a checkout change during native inventory reads', async () => {
     const f = await fixture();
     git('checkout', '-q', 'feature');

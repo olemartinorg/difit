@@ -325,6 +325,50 @@ describe('useFileWatch', () => {
       },
     );
 
+    it('coalesces a newer change during a failed read and lets a new event recover another real failure', async () => {
+      let rejectPending: ((error: Error) => void) | undefined;
+      const pending = new Promise<void>((_resolve, reject) => {
+        rejectPending = reject;
+      });
+      const onReload = vi
+        .fn()
+        .mockImplementationOnce(() => pending)
+        .mockRejectedValueOnce(new Error('Temporary read failure'))
+        .mockResolvedValueOnce(undefined);
+      const { result } = renderHook(() => useFileWatch(onReload));
+      await waitFor(() => expect(result.current.isConnected).toBe(true));
+      let first: Promise<void> | undefined;
+      act(() => {
+        first = result.current.reload();
+      });
+      act(() =>
+        MockEventSource.instances[0]!.dispatchMessage(
+          JSON.stringify({ type: 'reload', changeType: 'commit' }),
+        ),
+      );
+      await act(async () => {
+        rejectPending?.(new Error('Old failed read'));
+        await first;
+      });
+      expect(result.current.shouldReload).toBe(true);
+      expect(result.current.error).toBeNull();
+      await act(async () => {
+        await result.current.reload();
+      });
+      expect(result.current.error).toBe('Temporary read failure');
+      act(() =>
+        MockEventSource.instances[0]!.dispatchMessage(
+          JSON.stringify({ type: 'reload', changeType: 'commit' }),
+        ),
+      );
+      expect(result.current.error).toBeNull();
+      await act(async () => {
+        await result.current.reload();
+      });
+      expect(result.current.shouldReload).toBe(false);
+      expect(onReload).toHaveBeenCalledTimes(3);
+    });
+
     it('should not reload if already reloading', async () => {
       const mockOnReload = vi
         .fn()

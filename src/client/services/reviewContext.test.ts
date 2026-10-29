@@ -65,3 +65,42 @@ test('review requests retain captured identity defaults without changing the glo
     '/api/open-in-editor',
   ]);
 });
+
+test('reconciles only obsolete read attempts and preserves actual failures and mutation outcomes', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      Response.json({ error: 'Changed during read', code: 'REVIEW_READ_CHANGED' }, { status: 409 }),
+    )
+    .mockResolvedValueOnce(Response.json({ head: 'accepted' }))
+    .mockResolvedValueOnce(Response.json({ error: 'Missing Git object' }, { status: 500 }))
+    .mockResolvedValueOnce(
+      Response.json({ error: 'Changed during read', code: 'REVIEW_READ_CHANGED' }, { status: 409 }),
+    );
+  vi.stubGlobal('fetch', fetcher);
+  vi.resetModules();
+  const { reviewFetch } = await import('./reviewContext');
+  expect(await (await reviewFetch('/api/diff')).json()).toEqual({ head: 'accepted' });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect((await reviewFetch('/api/diff')).status).toBe(500);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect((await reviewFetch('/api/review-handoff', { method: 'POST', body: '{}' })).status).toBe(
+    409,
+  );
+  expect(fetcher).toHaveBeenCalledTimes(4);
+});
+
+test('owner cancellation stops an obsolete read before a replacement dispatch', async () => {
+  const controller = new AbortController();
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => {
+    controller.abort();
+    return Response.json({ code: 'REVIEW_READ_CHANGED' }, { status: 409 });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  vi.resetModules();
+  const { reviewFetch } = await import('./reviewContext');
+  await expect(reviewFetch('/api/diff', { signal: controller.signal })).rejects.toMatchObject({
+    name: 'AbortError',
+  });
+  expect(fetcher).toHaveBeenCalledOnce();
+});

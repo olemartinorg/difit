@@ -171,7 +171,7 @@ vi.mock('./git-diff.js', () => {
 
 describe('Server Integration Tests', () => {
   it.each(['/api/diff', '/api/review'])(
-    'explains how to recover a changed checkout on %s without loading another diff',
+    'rejects a different branch on %s without loading another diff',
     async (path) => {
       const result = await startServer({ preferredPort: 0, openBrowser: false, keepAlive: true });
       try {
@@ -181,7 +181,7 @@ describe('Server Integration Tests', () => {
             repository: 'fixture',
             branch: 'fixture-branch',
             head,
-            checkout: { branch: 'fixture-branch', head },
+            checkout: { branch: 'another-branch', head },
           }),
         });
         const calls = parserInstances.at(-1).parseDiff.mock.calls.length;
@@ -189,7 +189,7 @@ describe('Server Integration Tests', () => {
         expect(response.status).toBe(409);
         expect(await response.json()).toEqual({
           error:
-            'The checkout changed. Reopen Review to use the current checkout. Your captured review and notes have been kept.',
+            'The checkout changed to another branch. Your captured review and notes have been kept.',
         });
         expect(parserInstances.at(-1).parseDiff).toHaveBeenCalledTimes(calls);
       } finally {

@@ -65,3 +65,41 @@ it('captures host context at export entry before hashing and keeps it after navi
   };
   expect(snapshot.hostContext).toEqual({ destination: 'conversation-a' });
 });
+
+it('submits the accepted displayed range while a newer selection is still pending', async () => {
+  vi.mocked(generateDiffHash).mockResolvedValue('displayed-diff');
+  window.difitHost = { captureReviewHandoffContext: async () => ({}) };
+  const request = vi.fn<typeof fetch>().mockResolvedValue(Response.json({}));
+  vi.stubGlobal('fetch', request);
+  const accepted = { baseCommitish: 'accepted-base', targetCommitish: 'accepted-head' };
+  const { result } = renderHook(() =>
+    useReviewExport({
+      diff: {
+        files: [],
+        commit: 'accepted-head',
+        requestedBaseCommitish: accepted.baseCommitish,
+        requestedTargetCommitish: accepted.targetCommitish,
+        reviewSubject: { repository: 'fixture', branch: 'feature', head: 'accepted-head' },
+        agentHandoff: true,
+      } as unknown as DiffResponse,
+      selection: { baseCommitish: 'new-base', targetCommitish: 'new-head' },
+      resolvedSelection: accepted,
+      threads: [],
+      settings: DEFAULT_REVIEW_SETTINGS,
+      ready: true,
+      commentsUrl: '/comments',
+      commentVersion: 0,
+      generatePrompt: () => 'Displayed feedback',
+      resetViewed: async () => {},
+      clearComments: () => {},
+    }),
+  );
+  await act(async () => {
+    await result.current.exportReview();
+  });
+  const snapshot = JSON.parse(request.mock.calls[0]?.[1]?.body as string);
+  expect(snapshot.selection).toMatchObject(accepted);
+  expect(snapshot.resolvedSelection).toEqual(accepted);
+  expect(snapshot.subject.head).toBe('accepted-head');
+  expect(snapshot.diffHash).toBe('displayed-diff');
+});

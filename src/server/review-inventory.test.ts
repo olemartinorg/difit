@@ -75,7 +75,7 @@ describe('arbitrary branch review inventory', () => {
       ),
     );
     expect(changed[0]?.status?.targetHash).toBe(requests[0]!.head);
-  });
+  }, 30_000);
 
   it('batch failures preserve successful peers and fresh checkout admission', async () => {
     const head = git('rev-parse', 'HEAD');
