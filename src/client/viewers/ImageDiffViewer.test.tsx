@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import type { DiffFile } from '../../types/diff';
@@ -35,6 +35,99 @@ describe('ImageDiffViewer', () => {
       blob: () => Promise.resolve({ size: 1024 }),
     });
   });
+
+  it('binds both image requests to the displayed subject and each accepted blob identity', () => {
+    const subject = {
+      repository: 'repo',
+      branch: 'feature',
+      head: 'a'.repeat(40),
+      checkout: { branch: 'feature', head: 'a'.repeat(40) },
+    };
+    const file: DiffFile = {
+      path: 'new image.png',
+      oldPath: 'old image.png',
+      status: 'renamed',
+      additions: 0,
+      deletions: 0,
+      chunks: [],
+      oldBlobId: 'b'.repeat(40),
+      newBlobId: 'c'.repeat(40),
+    };
+    renderViewer(file, {
+      baseCommitish: 'captured-base',
+      targetCommitish: '.',
+      reviewSubject: subject,
+    });
+    const images = screen.getAllByRole<HTMLImageElement>('img');
+    for (const [index, blobId] of [file.oldBlobId, file.newBlobId].entries()) {
+      const url = new URL(images[index]!.src);
+      expect(JSON.parse(url.searchParams.get('reviewSubject')!)).toEqual(subject);
+      expect(url.searchParams.get('blobId')).toBe(blobId);
+      expect(url.pathname).toContain('image.png');
+    }
+    expect(new URL(images[1]!.src).searchParams.get('ref')).toBe('.');
+  });
+
+  it.each([
+    { status: 'added', diffMode: 'unified' },
+    { status: 'deleted', diffMode: 'unified' },
+    { status: 'modified', diffMode: 'unified' },
+    { status: 'modified', diffMode: 'split' },
+    { status: 'renamed', diffMode: 'split' },
+  ] as const)(
+    'restores rejected $status images in $diffMode mode after accepted refresh',
+    async ({ status, diffMode }) => {
+      const subject = {
+        repository: 'repo',
+        branch: 'feature',
+        head: 'a'.repeat(40),
+        checkout: { branch: 'feature', head: 'a'.repeat(40) },
+      };
+      const file: DiffFile = {
+        path: 'image.png',
+        oldPath: status === 'renamed' ? 'old-image.png' : undefined,
+        status,
+        additions: 0,
+        deletions: 0,
+        chunks: [],
+        oldBlobId: 'b'.repeat(40),
+        newBlobId: 'c'.repeat(40),
+      };
+      const props = { ...baseProps, file, diffMode, reviewSubject: subject, targetCommitish: '.' };
+      const view = render(<ImageDiffViewer {...props} />);
+      const images = Array.from(view.container.querySelectorAll('img'));
+      for (const image of images) {
+        fireEvent.error(image);
+        expect(image.style.display).toBe('none');
+        expect(image.nextElementSibling).not.toHaveClass('hidden');
+      }
+      const acceptedSubject = {
+        ...subject,
+        head: 'd'.repeat(40),
+        checkout: { ...subject.checkout, head: 'd'.repeat(40) },
+      };
+      view.rerender(<ImageDiffViewer {...props} reviewSubject={acceptedSubject} />);
+      for (const [index, image] of images.entries()) {
+        expect(view.container.querySelectorAll('img')[index]).toBe(image);
+        expect(new URL(image.src).searchParams.get('reviewSubject')).toBe(
+          JSON.stringify(acceptedSubject),
+        );
+        Object.defineProperty(image, 'naturalWidth', { value: 240, configurable: true });
+        Object.defineProperty(image, 'naturalHeight', { value: 120, configurable: true });
+        fireEvent.load(image);
+        expect(image.style.display).toBe('');
+        expect(image.nextElementSibling).toHaveClass('hidden');
+      }
+      await waitFor(() =>
+        expect(screen.getAllByText(/W: 240px \| H: 120px/)).toHaveLength(images.length),
+      );
+      expect(fetch).toHaveBeenCalledTimes(images.length);
+      for (const [input] of vi.mocked(fetch).mock.calls) {
+        const url = new URL(String(input));
+        expect(JSON.parse(url.searchParams.get('reviewSubject')!)).toEqual(acceptedSubject);
+      }
+    },
+  );
 
   describe('File status handling', () => {
     it('renders deleted image correctly', () => {

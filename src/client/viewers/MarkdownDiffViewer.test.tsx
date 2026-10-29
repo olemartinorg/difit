@@ -247,6 +247,89 @@ describe('MarkdownDiffViewer', () => {
     setMatchMedia(true);
   });
 
+  it('scopes deferred Markdown reads to the accepted subject/blob and does not retry rejected content', async () => {
+    const subject = {
+      repository: 'repo',
+      branch: 'feature',
+      head: 'a'.repeat(40),
+      checkout: { branch: 'feature', head: 'a'.repeat(40) },
+    };
+    const file = createFile({ oldBlobId: 'b'.repeat(40), newBlobId: 'c'.repeat(40) });
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ code: 'REVIEW_READ_CHANGED' }), { status: 409 }),
+    );
+    renderViewer({ file, targetCommitish: '.', reviewSubject: subject });
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('Loading preview...')).not.toBeInTheDocument());
+    for (const [input] of vi.mocked(fetch).mock.calls) {
+      const url = new URL(String(input), 'http://localhost');
+      expect(JSON.parse(url.searchParams.get('reviewSubject')!)).toEqual(subject);
+      expect(url.searchParams.get('blobId')).toBe(
+        url.searchParams.get('ref') === '.' ? file.newBlobId : file.oldBlobId,
+      );
+    }
+    const settled = vi.mocked(fetch).mock.calls.length;
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    expect(fetch).toHaveBeenCalledTimes(settled);
+    expect(screen.queryByRole('button', { name: 'Full Preview' })).not.toBeInTheDocument();
+  });
+
+  it.each(['new HEAD', 'explicit same-context refresh'])(
+    'retries a rejected unchanged Markdown file once after accepting %s',
+    async (refresh) => {
+      const subject = {
+        repository: 'repo',
+        branch: 'feature',
+        head: 'a'.repeat(40),
+        checkout: { branch: 'feature', head: 'a'.repeat(40) },
+      };
+      const props = createProps({
+        file: createFile({ oldBlobId: 'b'.repeat(40), newBlobId: 'c'.repeat(40) }),
+        targetCommitish: '.',
+        reviewSubject: subject,
+      });
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(JSON.stringify({ code: 'REVIEW_READ_CHANGED' }), { status: 409 }),
+      );
+      const view = render(
+        <WordHighlightProvider>
+          <MarkdownDiffViewer {...props} />
+        </WordHighlightProvider>,
+      );
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.queryByText('Loading preview...')).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: 'Full Preview' })).not.toBeInTheDocument();
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      vi.mocked(fetch).mockImplementation(async () => new Response('# Recovered accepted preview'));
+      const head = refresh === 'new HEAD' ? 'd'.repeat(40) : subject.head;
+      const acceptedSubject = { ...subject, head, checkout: { ...subject.checkout, head } };
+      view.rerender(
+        <WordHighlightProvider>
+          <MarkdownDiffViewer {...props} reviewSubject={acceptedSubject} />
+        </WordHighlightProvider>,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Full Preview' }));
+      expect(await screen.findByText('Recovered accepted preview')).toBeInTheDocument();
+      expect(fetch).toHaveBeenCalledTimes(4);
+      for (const [input] of vi.mocked(fetch).mock.calls.slice(2)) {
+        const url = new URL(String(input), 'http://localhost');
+        expect(JSON.parse(url.searchParams.get('reviewSubject')!)).toEqual(acceptedSubject);
+        expect(url.searchParams.get('blobId')).toBe(
+          url.searchParams.get('ref') === '.' ? props.file.newBlobId : props.file.oldBlobId,
+        );
+      }
+      view.rerender(
+        <WordHighlightProvider>
+          <MarkdownDiffViewer {...props} reviewSubject={acceptedSubject} />
+        </WordHighlightProvider>,
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(fetch).toHaveBeenCalledTimes(4);
+    },
+  );
+
   it('shows Full Preview tab only after prefetch succeeds', async () => {
     (global.fetch as any).mockResolvedValue({
       ok: true,

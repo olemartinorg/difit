@@ -181,6 +181,16 @@ describe('GitDiffParser', () => {
       expect(mockReadFileSync).not.toHaveBeenCalled();
     });
 
+    it('reads symbolic-link text without following its target', async () => {
+      const fs = await import('fs');
+      vi.mocked(fs.lstatSync).mockReturnValueOnce({ isSymbolicLink: () => true } as ReturnType<
+        typeof fs.lstatSync
+      >);
+      vi.mocked(fs.readlinkSync).mockReturnValueOnce('/outside/secret');
+      expect((await parser.getBlobContent('link', '.')).toString()).toBe('/outside/secret');
+      expect(mockReadFileSync).not.toHaveBeenCalled();
+    });
+
     it('rejects git ref paths outside the repository before invoking git', async () => {
       await expect(parser.getBlobContent('../outside.txt', 'HEAD')).rejects.toThrow(
         'File path outside repository',

@@ -127,4 +127,43 @@ describe('NotebookDiffViewer', () => {
 
     expect(screen.queryByRole('button', { name: 'Full Preview' })).not.toBeInTheDocument();
   });
+
+  it('uses accepted blob identities and refreshes full preview after a same-HEAD file update is adopted', async () => {
+    const subject = {
+      repository: 'repo',
+      branch: 'feature',
+      head: 'a'.repeat(40),
+      checkout: { branch: 'feature', head: 'a'.repeat(40) },
+    };
+    const oldBlobId = 'b'.repeat(40),
+      firstBlobId = 'c'.repeat(40),
+      nextBlobId = 'd'.repeat(40);
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = new URL(String(input), 'http://localhost');
+      expect(JSON.parse(url.searchParams.get('reviewSubject')!)).toEqual(subject);
+      expect([oldBlobId, firstBlobId, nextBlobId]).toContain(url.searchParams.get('blobId'));
+      return new Response(
+        url.searchParams.get('blobId') === nextBlobId
+          ? notebookContent.replace('Notebook title', 'After manual refresh')
+          : notebookContent,
+      );
+    });
+    const props = createProps({
+      file: createFile({ oldBlobId, newBlobId: firstBlobId }),
+      targetCommitish: '.',
+      reviewSubject: subject,
+    });
+    const view = (newBlobId: string) => (
+      <WordHighlightProvider>
+        <NotebookDiffViewer {...props} file={{ ...props.file, newBlobId }} />
+      </WordHighlightProvider>
+    );
+    const rendered = render(view(firstBlobId));
+    fireEvent.click(await screen.findByRole('button', { name: 'Full Preview' }));
+    expect(await screen.findByText('Notebook title')).toBeInTheDocument();
+    rendered.rerender(view(nextBlobId));
+    fireEvent.click(await screen.findByRole('button', { name: 'Full Preview' }));
+    expect(await screen.findByText('After manual refresh')).toBeInTheDocument();
+    expect(screen.queryByText('Notebook title')).not.toBeInTheDocument();
+  });
 });

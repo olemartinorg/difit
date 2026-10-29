@@ -104,3 +104,31 @@ test('owner cancellation stops an obsolete read before a replacement dispatch', 
   });
   expect(fetcher).toHaveBeenCalledOnce();
 });
+
+test('auxiliary reads use the accepted diff subject and never replay an obsolete context', async () => {
+  window.history.replaceState(null, '', '/?reviewSubject=original');
+  const accepted = {
+    repository: 'fixture',
+    branch: 'feature',
+    head: 'accepted',
+    checkout: { branch: 'feature', head: 'accepted' },
+  };
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () =>
+      Response.json({ code: 'REVIEW_READ_CHANGED' }, { status: 409 }),
+    );
+  vi.stubGlobal('fetch', fetcher);
+  vi.resetModules();
+  const { reviewFetch } = await import('./reviewContext');
+  for (const path of [
+    '/api/blob/file?ref=.',
+    '/api/line-count/file?newRef=.',
+    '/api/generated-status/file?ref=.',
+  ]) {
+    expect((await reviewFetch(path, undefined, accepted)).status).toBe(409);
+    const request = new URL(String(fetcher.mock.lastCall?.[0]), window.location.origin);
+    expect(JSON.parse(request.searchParams.get('reviewSubject')!)).toEqual(accepted);
+  }
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});
