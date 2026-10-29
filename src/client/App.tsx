@@ -250,8 +250,13 @@ function App() {
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
     commentsContextKey !== null && commentsContextKey === bootstrappedCommentsKey;
-  const bootstrappingCommentsKeyRef = useRef<string | null>(null);
-  const bootstrapThreadsRef = useRef<{ key: string; threads: DiffCommentThread[] } | null>(null);
+  const bootstrappingCommentsRef = useRef<{ key: string } | null>(null);
+  const bootstrapThreadsRef = useRef<{
+    key: string;
+    threads: DiffCommentThread[];
+    reconciled: boolean;
+  } | null>(null);
+  const [commentBootstrapRetry, setCommentBootstrapRetry] = useState(0);
   const skipNextCommentSyncRef = useRef(false);
   // Last server comment version seen; echoed back as baseVersion so the server can detect concurrent writes.
   const serverCommentVersionRef = useRef<number | null>(null);
@@ -310,11 +315,22 @@ function App() {
     async function refreshComments() {
       const pendingPrefix = `difit-pending-comments/${commentsContextKey}/`;
       if (
-        bootstrappingCommentsKeyRef.current === commentsContextKey ||
+        bootstrappingCommentsRef.current?.key === commentsContextKey ||
         pendingCommentSyncRef.current > 0 ||
         Object.keys(localStorage).some((key) => key.startsWith(pendingPrefix))
       ) {
         pendingCommentRefreshRef.current = true;
+        return;
+      }
+      // Notifications cannot adopt a snapshot until the initial browser baseline
+      // has been reconciled. A failed bootstrap retries through that same owner.
+      if (
+        commentsContextKey &&
+        (bootstrapThreadsRef.current?.key !== commentsContextKey ||
+          !bootstrapThreadsRef.current.reconciled)
+      ) {
+        pendingCommentRefreshRef.current = true;
+        setCommentBootstrapRetry((retry) => retry + 1);
         return;
       }
       pendingCommentRefreshRef.current = false;
@@ -1201,7 +1217,7 @@ function App() {
       return;
     }
 
-    if (bootstrappingCommentsKeyRef.current === commentsContextKey) {
+    if (bootstrappingCommentsRef.current?.key === commentsContextKey) {
       return;
     }
 
@@ -1216,10 +1232,13 @@ function App() {
       bootstrapThreadsRef.current = {
         key: commentsContextKey,
         threads: loadReviewComments(repository).threads,
+        reconciled: false,
       };
     }
-    const initialThreads = bootstrapThreadsRef.current.threads;
-    bootstrappingCommentsKeyRef.current = commentsContextKey;
+    const baseline = bootstrapThreadsRef.current;
+    const initialThreads = baseline.threads;
+    const attempt = { key: commentsContextKey };
+    bootstrappingCommentsRef.current = attempt;
     let reconciled = false;
     let cancelled = false;
 
@@ -1281,6 +1300,7 @@ function App() {
         if (commentOperations(initialThreads, localThreads).length) {
           syncedThreadsRef.current = initialThreads;
           serverCommentVersionRef.current = snapshot.version ?? null;
+          baseline.reconciled = true;
           setBootstrappedCommentsKey(commentsContextKey);
           const saved = await syncThreadsToServer(localThreads);
           if (
@@ -1292,6 +1312,7 @@ function App() {
             adoptServerThreads({ version: saved.version, threads: saved.threads });
         } else {
           if (!adoptServerThreads(snapshot)) return;
+          baseline.reconciled = true;
           setBootstrappedCommentsKey(commentsContextKey);
         }
         reconciled = true;
@@ -1302,8 +1323,8 @@ function App() {
           setCommentSaveError(String(commentsError));
         }
       } finally {
-        if (bootstrappingCommentsKeyRef.current === commentsContextKey) {
-          bootstrappingCommentsKeyRef.current = null;
+        if (bootstrappingCommentsRef.current === attempt) {
+          bootstrappingCommentsRef.current = null;
           if (reconciled && pendingCommentRefreshRef.current) void handleCommentsChanged();
         }
       }
@@ -1313,12 +1334,13 @@ function App() {
 
     return () => {
       cancelled = true;
-      if (bootstrappingCommentsKeyRef.current === commentsContextKey) {
-        bootstrappingCommentsKeyRef.current = null;
+      if (bootstrappingCommentsRef.current === attempt) {
+        bootstrappingCommentsRef.current = null;
       }
     };
   }, [
     bootstrappedCommentsKey,
+    commentBootstrapRetry,
     commentsContextKey,
     fetchServerThreads,
     adoptServerThreads,
