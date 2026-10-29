@@ -70,9 +70,11 @@ const mockWatchState: ClientWatchState = {
 };
 
 let mockCommentsChanged: (() => Promise<void>) | undefined;
+let mockReloadDiff: (() => Promise<void>) | undefined;
 vi.mock('./hooks/useFileWatch', () => ({
   useFileWatch: vi.fn((onReload?: () => Promise<void>, onCommentsChanged?: () => Promise<void>) => {
     mockCommentsChanged = onCommentsChanged;
+    mockReloadDiff = onReload;
     return {
       shouldReload: mockWatchState.shouldReload,
       isConnected: true,
@@ -1795,9 +1797,19 @@ describe('notes submitted during initial comment loading', () => {
   afterEach(() => {
     if (mockedComments) vi.mocked(useDiffComments).mockImplementation(mockedComments);
   });
-  it.each([false, true])(
-    'keeps a first note and existing server threads (save rejected: %s)',
-    async (rejectSave) => {
+  it.each([
+    { scenario: 'successful bootstrap', rejectSave: false, overlap: false, failRead: false },
+    { scenario: 'rejected save', rejectSave: true, overlap: false, failRead: false },
+    { scenario: 'superseded bootstrap read', rejectSave: false, overlap: true, failRead: false },
+    {
+      scenario: 'notification after rejected bootstrap',
+      rejectSave: false,
+      overlap: false,
+      failRead: true,
+    },
+  ])(
+    'keeps a first note and existing server threads: $scenario',
+    async ({ rejectSave, overlap, failRead }) => {
       const repository = 'bootstrap-repository',
         review = 'bootstrap-review';
       const cacheKey = `difit-review-comments-v1/${repository}/${review}`;
@@ -1821,7 +1833,12 @@ describe('notes submitted during initial comment loading', () => {
       const pending = new Promise<void>((resolve) => {
         release = resolve;
       });
+      let releaseReplacement!: () => void;
+      const replacementRead = new Promise<void>((resolve) => {
+        releaseReplacement = resolve;
+      });
       let reads = 0;
+      let refreshed = false;
       const serverThreads = [saved];
       type Write = {
         writeId: string;
@@ -1856,8 +1873,11 @@ describe('notes submitted during initial comment loading', () => {
       vi.mocked(fetch).mockImplementation(async (input, init) => {
         const path = String(input);
         if (path.startsWith('/api/comments-json')) {
-          reads++;
-          await pending;
+          const read = ++reads;
+          if (read === 1) await pending;
+          if (overlap && read === 2) await replacementRead;
+          if (failRead && read === 1)
+            return Response.json({ error: 'Read rejected' }, { status: 503 });
           return Response.json({ version: 1, threads: serverThreads });
         }
         if (path.startsWith('/api/comments?') && init?.method === 'POST') {
@@ -1880,6 +1900,11 @@ describe('notes submitted during initial comment loading', () => {
           }
           return Response.json({ version: 2, merged: true, threads: serverThreads });
         }
+        if (refreshed && path.startsWith('/api/diff')) {
+          const response = await defaultFetch(input, init);
+          const diff = (await response.json()) as DiffResponse;
+          return Response.json({ ...diff, commit: 'advanced-same-branch' });
+        }
         return defaultFetch(input, init);
       });
       renderApp();
@@ -1895,9 +1920,37 @@ describe('notes submitted during initial comment loading', () => {
       await act(async () => {
         fireEvent.submit(field.closest('form')!);
         expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
-        release();
         await notification;
       });
+      if (overlap) {
+        refreshed = true;
+        await act(async () => {
+          await mockReloadDiff?.();
+        });
+        await waitFor(() => expect(reads).toBe(2));
+      }
+      await act(async () => {
+        release();
+      });
+      if (failRead) {
+        await waitFor(() =>
+          expect(document.body).toHaveTextContent('Failed to fetch comments: 503'),
+        );
+      }
+      if (overlap || failRead) {
+        await act(async () => {
+          await mockCommentsChanged?.();
+        });
+        expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
+      }
+      if (overlap) {
+        // The obsolete A completion must not release B's admission guard.
+        expect(reads).toBe(2);
+        expect(writes).toHaveLength(0);
+        await act(async () => {
+          releaseReplacement();
+        });
+      }
       expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
       await waitFor(() => expect(writes).toHaveLength(1));
       expect(writes[0]!.operations).toEqual([
