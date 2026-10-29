@@ -18,7 +18,7 @@ import {
 } from '../utils/wordLevelDiff';
 
 import { LineCommentForm as CommentForm, useCommentingLine } from './LiveCommentDraft';
-import { CommentThreadCard } from './CommentThreadCard';
+import { InlineCommentThreadCard } from './LiveCommentDraft';
 import { DiffLineRow } from './DiffLineRow';
 import type { AppearanceSettings } from './SettingsModal';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
@@ -518,7 +518,7 @@ export const DiffChunk = memo(function DiffChunk({
                           }`}
                         >
                           <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'} m-2 mx-4`}>
-                            <CommentThreadCard
+                            <InlineCommentThreadCard
                               thread={thread}
                               showAuthorBadges={showAuthorBadges}
                               onGeneratePrompt={onGenerateThreadPrompt}

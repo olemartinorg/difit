@@ -32,7 +32,11 @@ import { ReviewPicker } from './components/ReviewPicker';
 import { useReviewInventory } from './hooks/useReviewInventory';
 import { useReviewSettings } from './hooks/useReviewSettings';
 import { ReviewSettingsSection } from './components/ReviewSettingsSection';
-import { getInitialMergedChunks, reconcileDiffResponse } from './utils/stableDiff';
+import {
+  getInitialMergedChunks,
+  getReviewIntentKey,
+  reconcileDiffResponse,
+} from './utils/stableDiff';
 import { useReviewReset } from './hooks/useReviewReset';
 import { DiffViewer } from './components/DiffViewer';
 import { FileList } from './components/FileList';
@@ -69,6 +73,7 @@ import {
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
 import { buildFileLineIndex, isThreadOutdated } from './utils/outdatedComments';
+import { createDraftAnchor, resolveDraftAnchor } from './utils/draftAnchor';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
 const DIFF_VIEW_MODE_STORAGE_KEY = 'difit.diffViewMode';
@@ -168,6 +173,7 @@ function App() {
   const [selectedRevision, setSelectedRevision] = useState<DiffSelection>(
     createDiffSelection('', ''),
   );
+  const [reviewIntent, setReviewIntent] = useState(0);
   const [resolvedBaseRevision, setResolvedBaseRevision] = useState<string>('');
   const [resolvedTargetRevision, setResolvedTargetRevision] = useState<string>('');
   const hasUserSelectedRevisionRef = useRef(false);
@@ -501,7 +507,7 @@ function App() {
   // Reset initialization flag when diff context changes
   useEffect(() => {
     collapsedInitializedRef.current = false;
-  }, [diffData?.repositoryId, resolvedSelectionKey, diffData?.commit]);
+  }, [diffData?.repositoryId, diffData?.reviewId, diffData?.baseCommitish, reviewIntent]);
 
   // Initialize collapsed files from viewed files (only once per diff)
   useEffect(() => {
@@ -509,7 +515,13 @@ function App() {
       setCollapsedFiles(new Set(viewedFiles));
       collapsedInitializedRef.current = true;
     }
-  }, [viewedFiles, hasLoadedInitialViewedFiles]);
+  }, [
+    viewedFiles,
+    hasLoadedInitialViewedFiles,
+    reviewIntent,
+    diffData?.reviewId,
+    diffData?.baseCommitish,
+  ]);
   const {
     renderedFilePaths,
     ensureFileRendered,
@@ -519,6 +531,7 @@ function App() {
     isFileScrolledPastContainerTop,
   } = useLazyDiffRendering({
     diffData,
+    intentKey: getReviewIntentKey(diffData, reviewIntent),
     diffScrollContainerRef,
     setDiffData,
   });
@@ -646,6 +659,7 @@ function App() {
     diffIdentity: diffDataVersion,
     files: diffData?.files,
     reviewSubject: diffData?.reviewSubject,
+    intentKey: getReviewIntentKey(diffData, reviewIntent),
   });
 
   const getMergedChunksRef = useRef(getMergedChunks);
@@ -695,23 +709,48 @@ function App() {
     return map;
   }, [navigableFiles]);
 
+  const threadAnchorsRef = useRef(new Map<string, ReturnType<typeof createDraftAnchor>>());
   const normalizedThreads = useMemo<CommentThread[]>(
     () =>
-      threads.map((thread) => ({
-        id: thread.id,
-        file: thread.filePath,
-        line:
+      threads.map((thread) => {
+        const key = `${diffData?.reviewId}:${thread.id}`;
+        const file = navigableFiles.find((file) => file.path === thread.filePath);
+        let anchor = threadAnchorsRef.current.get(key);
+        const originalLine =
           typeof thread.position.line === 'number'
             ? thread.position.line
-            : ([thread.position.line.start, thread.position.line.end] as [number, number]),
-        side: thread.position.side,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        codeContent: thread.codeSnapshot?.content,
-        isOutdated: isThreadOutdated(thread, fileLineIndexByPath.get(thread.filePath)),
-        messages: thread.messages,
-      })),
-    [threads, fileLineIndexByPath],
+            : ([thread.position.line.start, thread.position.line.end] as [number, number]);
+        if (!anchor && file && thread.codeSnapshot) {
+          const candidate = createDraftAnchor(
+            { side: thread.position.side, lineNumber: originalLine },
+            file.chunks,
+          );
+          if (candidate.code === thread.codeSnapshot.content) {
+            anchor = candidate;
+            threadAnchorsRef.current.set(key, anchor);
+          }
+        }
+        const mapped = anchor && file ? resolveDraftAnchor(anchor, file.chunks) : null;
+        return {
+          id: thread.id,
+          file: thread.filePath,
+          line:
+            mapped && !mapped.outdated
+              ? mapped.lineNumber
+              : typeof thread.position.line === 'number'
+                ? thread.position.line
+                : ([thread.position.line.start, thread.position.line.end] as [number, number]),
+          side: thread.position.side,
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt,
+          codeContent: thread.codeSnapshot?.content,
+          isOutdated: mapped
+            ? mapped.outdated
+            : isThreadOutdated(thread, fileLineIndexByPath.get(thread.filePath)),
+          messages: thread.messages,
+        };
+      }),
+    [threads, fileLineIndexByPath, navigableFiles, diffData?.reviewId],
   );
   const showAuthorBadges = useMemo(
     () => hasMultipleCommentAuthors(normalizedThreads.flatMap((thread) => thread.messages)),
@@ -1090,6 +1129,7 @@ function App() {
       hasUserSelectedRevisionRef.current = true;
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
+      if (!background) setReviewIntent((value) => value + 1);
       if (!background) setLoading(true);
       setError(null);
       await fetchDiffData(nextSelection);

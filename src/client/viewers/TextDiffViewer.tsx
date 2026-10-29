@@ -88,6 +88,13 @@ export function TextDiffViewer({
       onAddComment={onAddComment}
       syntaxTheme={syntaxTheme}
       diffMode={diffMode}
+      threads={threads}
+      showAuthorBadges={showAuthorBadges}
+      onGenerateThreadPrompt={onGenerateThreadPrompt}
+      onRemoveThread={onRemoveThread}
+      onReplyToThread={onReplyToThread}
+      onRemoveMessage={onRemoveMessage}
+      onUpdateMessage={onUpdateMessage}
     >
       {mergedChunks.map((mergedChunk, mergedIndex) => {
         const isFirstMerged = mergedIndex === 0;

@@ -16,6 +16,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { DiffChunk, DiffFile } from '../../types/diff';
+import { CommentThreadCard } from './CommentThreadCard';
 import {
   createDraftAnchor,
   resolveDraftAnchor,
@@ -31,6 +32,89 @@ const DraftContext = createContext<{
   host: HTMLDivElement;
 } | null>(null);
 
+type ThreadHost = { node: HTMLDivElement; focused?: HTMLElement; top?: number; placed?: boolean };
+const ThreadContext = createContext<{
+  hosts: Map<string, ThreadHost>;
+  slots: Map<string, HTMLDivElement>;
+} | null>(null);
+const emptyThreads: NonNullable<DiffViewerBodyProps['threads']> = [];
+
+function rememberThread(entry: ThreadHost) {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && entry.node.contains(active)) {
+    entry.focused = active;
+    entry.top = active.getBoundingClientRect().top;
+  }
+}
+
+function placeThread(entry: ThreadHost, slot: HTMLElement) {
+  if (entry.node.parentNode === slot) return;
+  rememberThread(entry);
+  slot.append(entry.node);
+  entry.placed = true;
+  if (entry.focused) {
+    entry.focused.focus({ preventScroll: true });
+    if (entry.top !== undefined) {
+      for (let parent = slot.parentElement; parent; parent = parent.parentElement) {
+        if (/auto|scroll/.test(getComputedStyle(parent).overflowY)) {
+          parent.scrollTop += entry.focused.getBoundingClientRect().top - entry.top;
+          break;
+        }
+      }
+    }
+    entry.focused = undefined;
+    entry.top = undefined;
+  }
+}
+
+function StableThreadCard(props: ComponentProps<typeof CommentThreadCard>) {
+  const context = useContext(ThreadContext);
+  if (!context) throw new Error('A stable thread requires its live comment owner');
+  const fallback = useRef<HTMLDivElement>(null);
+  const [entry] = useState<ThreadHost>(() => ({ node: document.createElement('div') }));
+  useLayoutEffect(() => {
+    context.hosts.set(props.thread.id, entry);
+    const slot = context.slots.get(props.thread.id) ?? (entry.placed ? fallback.current : null);
+    if (slot) placeThread(entry, slot);
+    return () => {
+      rememberThread(entry);
+    };
+  });
+  useEffect(
+    () => () => {
+      context.hosts.delete(props.thread.id);
+      entry.node.remove();
+    },
+    [context, entry, props.thread.id],
+  );
+  return (
+    <>
+      <div ref={fallback} />
+      {createPortal(<CommentThreadCard {...props} />, entry.node)}
+    </>
+  );
+}
+
+// Row slots may move between hunks. The file's live-comment owner keeps the
+// actual thread/editor portal keyed by logical thread identity.
+export function InlineCommentThreadCard(props: ComponentProps<typeof CommentThreadCard>) {
+  const context = useContext(ThreadContext);
+  const slot = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!context || !slot.current) return;
+    const node = slot.current;
+    context.slots.set(props.thread.id, node);
+    const entry = context.hosts.get(props.thread.id);
+    if (entry) placeThread(entry, node);
+    return () => {
+      const current = context.hosts.get(props.thread.id);
+      if (current) rememberThread(current);
+      if (context.slots.get(props.thread.id) === node) context.slots.delete(props.thread.id);
+    };
+  }, [context, props.thread.id]);
+  return context ? <div ref={slot} /> : <CommentThreadCard {...props} />;
+}
+
 export function LiveCommentDraftProvider({
   children,
   file,
@@ -38,6 +122,13 @@ export function LiveCommentDraftProvider({
   onAddComment,
   syntaxTheme,
   diffMode,
+  threads = emptyThreads,
+  showAuthorBadges,
+  onGenerateThreadPrompt,
+  onRemoveThread,
+  onReplyToThread,
+  onRemoveMessage,
+  onUpdateMessage,
 }: {
   children: ReactNode;
   file: DiffFile;
@@ -45,7 +136,18 @@ export function LiveCommentDraftProvider({
   onAddComment: DiffViewerBodyProps['onAddComment'];
   syntaxTheme: DiffViewerBodyProps['syntaxTheme'];
   diffMode: DiffViewerBodyProps['diffMode'];
+  threads?: DiffViewerBodyProps['threads'];
+  showAuthorBadges?: boolean;
+  onGenerateThreadPrompt?: DiffViewerBodyProps['onGenerateThreadPrompt'];
+  onRemoveThread?: DiffViewerBodyProps['onRemoveThread'];
+  onReplyToThread?: DiffViewerBodyProps['onReplyToThread'];
+  onRemoveMessage?: DiffViewerBodyProps['onRemoveMessage'];
+  onUpdateMessage?: DiffViewerBodyProps['onUpdateMessage'];
 }) {
+  const [threadContext] = useState(() => ({
+    hosts: new Map<string, ThreadHost>(),
+    slots: new Map<string, HTMLDivElement>(),
+  }));
   const anchorDraft = useReviewDraft(`anchor:${file.path}`);
   const [anchor, setLocalAnchor] = useState<(DraftAnchor & { id: string }) | null>(null);
   const [host] = useState(() => {
@@ -95,40 +197,62 @@ export function LiveCommentDraftProvider({
 
   return (
     <DraftContext.Provider value={value}>
-      {children}
-      <div
-        ref={fallbackRef}
-        className={
-          draft?.outdated && diffMode === 'split'
-            ? `w-1/2 ${draft.side === 'new' ? 'ml-auto' : ''}`
-            : undefined
-        }
-      />
-      {anchor &&
-        draft &&
-        createPortal(
-          <>
-            {draft.outdated && (
-              <div className="mx-3 mt-2 text-xs text-github-text-secondary">
-                Original code no longer matches this diff.
-                <pre className="mt-1 whitespace-pre-wrap">{anchor.code}</pre>
-              </div>
-            )}
-            <CommentForm
-              key={anchor.id}
-              draftId={`new:${file.path}:${anchor.id}`}
-              onSubmit={async (body) => {
-                await onAddComment(draft.lineNumber, body, anchor.code, draft.side);
-                setAnchor(null);
-              }}
-              onCancel={() => setAnchor(null)}
-              selectedCode={anchor.code}
-              syntaxTheme={syntaxTheme}
-              filename={file.path}
-            />
-          </>,
-          host,
+      <ThreadContext.Provider value={threadContext}>
+        {children}
+        <div
+          ref={fallbackRef}
+          className={
+            draft?.outdated && diffMode === 'split'
+              ? `w-1/2 ${draft.side === 'new' ? 'ml-auto' : ''}`
+              : undefined
+          }
+        />
+        {anchor &&
+          draft &&
+          createPortal(
+            <>
+              {draft.outdated && (
+                <div className="mx-3 mt-2 text-xs text-github-text-secondary">
+                  Original code no longer matches this diff.
+                  <pre className="mt-1 whitespace-pre-wrap">{anchor.code}</pre>
+                </div>
+              )}
+              <CommentForm
+                key={anchor.id}
+                draftId={`new:${file.path}:${anchor.id}`}
+                onSubmit={async (body) => {
+                  await onAddComment(draft.lineNumber, body, anchor.code, draft.side);
+                  setAnchor(null);
+                }}
+                onCancel={() => setAnchor(null)}
+                selectedCode={anchor.code}
+                syntaxTheme={syntaxTheme}
+                filename={file.path}
+              />
+            </>,
+            host,
+          )}
+        {threads.map(
+          (thread) =>
+            onGenerateThreadPrompt &&
+            onRemoveThread &&
+            onReplyToThread &&
+            onRemoveMessage &&
+            onUpdateMessage && (
+              <StableThreadCard
+                key={thread.id}
+                thread={thread}
+                syntaxTheme={syntaxTheme}
+                showAuthorBadges={showAuthorBadges}
+                onGeneratePrompt={onGenerateThreadPrompt}
+                onRemoveThread={onRemoveThread}
+                onReplyToThread={onReplyToThread}
+                onRemoveMessage={onRemoveMessage}
+                onUpdateMessage={onUpdateMessage}
+              />
+            ),
         )}
+      </ThreadContext.Provider>
     </DraftContext.Provider>
   );
 }

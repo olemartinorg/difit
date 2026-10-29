@@ -13,6 +13,7 @@ interface UseLazyDiffRenderingOptions {
   diffData: DiffResponse | null;
   diffScrollContainerRef: React.RefObject<HTMLElement | null>;
   setDiffData: React.Dispatch<React.SetStateAction<DiffResponse | null>>;
+  intentKey?: string;
 }
 
 interface UseLazyDiffRenderingReturn {
@@ -28,6 +29,7 @@ export function useLazyDiffRendering({
   diffData,
   diffScrollContainerRef,
   setDiffData,
+  intentKey,
 }: UseLazyDiffRenderingOptions): UseLazyDiffRenderingReturn {
   const [renderedFilePaths, setRenderedFilePaths] = useState<Set<string>>(new Set());
   const renderedFilePathsRef = useRef<Set<string>>(new Set());
@@ -47,7 +49,9 @@ export function useLazyDiffRendering({
       return;
     }
 
-    const revisionKey = `${diffData.requestedBaseCommitish ?? ''}:${diffData.requestedTargetCommitish ?? ''}:${diffData.requestedBaseMode ?? 'direct'}`;
+    const revisionKey =
+      intentKey ??
+      `${diffData.requestedBaseCommitish ?? ''}:${diffData.requestedTargetCommitish ?? ''}:${diffData.requestedBaseMode ?? 'direct'}`;
     if (renderedRevisionKeyRef.current === revisionKey) {
       return;
     }
@@ -60,7 +64,7 @@ export function useLazyDiffRendering({
     renderedFilePathsRef.current = nextPaths;
     setRenderedFilePaths(nextPaths);
     generatedStatusCheckedRef.current.clear();
-  }, [diffData]);
+  }, [diffData, intentKey]);
 
   const ensureFileRendered = useCallback((filePath: string) => {
     const node = lazyFileNodesRef.current.get(filePath);

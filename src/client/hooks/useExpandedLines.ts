@@ -1,5 +1,5 @@
 import { reviewFetch } from '../services/reviewContext';
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useLayoutEffect } from 'react';
 import type { ReviewSubject } from '../../types/reviewSubmission';
 
 import {
@@ -18,6 +18,7 @@ interface UseExpandedLinesOptions {
   diffIdentity?: string | number;
   files?: DiffFile[];
   reviewSubject?: ReviewSubject;
+  intentKey?: string;
 }
 
 export interface MergedChunk extends DiffChunk {
@@ -109,6 +110,7 @@ export function useExpandedLines({
   diffIdentity,
   files,
   reviewSubject,
+  intentKey,
 }: UseExpandedLinesOptions): UseExpandedLinesResult {
   const isStdinDiff = baseCommitish === 'stdin' || targetCommitish === 'stdin';
   const [expandedState, setExpandedState] = useState<ExpandedLinesState>({});
@@ -124,27 +126,6 @@ export function useExpandedLines({
 
   const previousFilesRef = useRef(new Map<string, DiffFile>());
   const previousContextRef = useRef('');
-  useEffect(() => {
-    revisionGenerationRef.current += 1;
-    pendingFetchesRef.current.clear();
-    const context = `${baseCommitish ?? ''}\0${targetCommitish ?? ''}`;
-    const retained: ExpandedLinesState = {};
-    if (files && previousContextRef.current === context) {
-      for (const file of files) {
-        const expanded = expandedStateRef.current[file.path];
-        if (expanded && previousFilesRef.current.get(file.path)?.chunks === file.chunks)
-          retained[file.path] = expanded;
-      }
-    }
-    previousContextRef.current = context;
-    previousFilesRef.current = new Map(files?.map((file) => [file.path, file]));
-    expandedStateRef.current = retained;
-    setExpandedState(retained);
-    setIsLoading(false);
-    setLastUpdatedFilePath(null);
-    setLastUpdatedAt(0);
-  }, [baseCommitish, targetCommitish, diffIdentity, files]);
-
   const ensureFileContent = useCallback(
     async (file: DiffFile): Promise<FileExpandedState | null> => {
       if (isStdinDiff) {
@@ -233,6 +214,83 @@ export function useExpandedLines({
     setLastUpdatedFilePath(filePath);
     setLastUpdatedAt((prev) => prev + 1);
   }, []);
+
+  useLayoutEffect(() => {
+    const generation = ++revisionGenerationRef.current;
+    pendingFetchesRef.current.clear();
+    const context = intentKey ?? `${baseCommitish ?? ''}\0${targetCommitish ?? ''}`;
+    const retained: ExpandedLinesState = {};
+    const changed: DiffFile[] = [];
+    if (files && previousContextRef.current === context) {
+      for (const file of files) {
+        const expanded = expandedStateRef.current[file.path];
+        const previous = previousFilesRef.current.get(file.path);
+        if (!expanded || !previous) continue;
+        if (
+          previous.chunks === file.chunks &&
+          previous.oldBlobId === file.oldBlobId &&
+          previous.newBlobId === file.newBlobId
+        ) {
+          retained[file.path] = expanded;
+          continue;
+        }
+        // The captured base's old-side positions survive insertions in the new
+        // side. Match that hunk before refreshing its expanded blob contents.
+        const ranges = expanded.expandedRanges.flatMap((range) => {
+          const old = previous.chunks[range.chunkIndex];
+          if (!old) return [];
+          const boundary = (chunk: DiffChunk) =>
+            range.direction === 'up' ? chunk.oldStart : chunk.oldStart + chunk.oldLines - 1;
+          const candidates = file.chunks
+            .map((chunk, index) => ({ chunk, index }))
+            .filter(
+              ({ chunk }) =>
+                chunk.oldStart === old.oldStart ||
+                (chunk.oldStart < old.oldStart + Math.max(1, old.oldLines) &&
+                  old.oldStart < chunk.oldStart + Math.max(1, chunk.oldLines)),
+            );
+          const matched = candidates.sort(
+            (a, b) =>
+              Math.abs(boundary(a.chunk) - boundary(old)) -
+              Math.abs(boundary(b.chunk) - boundary(old)),
+          )[0];
+          if (!matched) return [];
+          const shift = boundary(matched.chunk) - boundary(old);
+          const count = Math.max(0, range.count + (range.direction === 'up' ? shift : -shift));
+          return count ? [{ ...range, count, chunkIndex: matched.index }] : [];
+        });
+        if (ranges.length) {
+          retained[file.path] = { expandedRanges: ranges };
+          changed.push(file);
+        }
+      }
+    }
+    previousContextRef.current = context;
+    previousFilesRef.current = new Map(files?.map((file) => [file.path, file]));
+    expandedStateRef.current = retained;
+    setExpandedState(retained);
+    setIsLoading(changed.length > 0);
+    setLastUpdatedFilePath(null);
+    setLastUpdatedAt(0);
+    void Promise.all(
+      changed.map(async (file) => {
+        const fresh = await ensureFileContent(file);
+        if (!fresh || revisionGenerationRef.current !== generation) return;
+        setExpandedState((previous) => ({ ...previous, [file.path]: fresh }));
+        markFileUpdated(file.path);
+      }),
+    ).finally(() => {
+      if (revisionGenerationRef.current === generation) setIsLoading(false);
+    });
+  }, [
+    baseCommitish,
+    targetCommitish,
+    diffIdentity,
+    files,
+    intentKey,
+    ensureFileContent,
+    markFileUpdated,
+  ]);
 
   const expandLines = useCallback(
     async (
@@ -533,6 +591,7 @@ export function useExpandedLines({
     (file: DiffFile, chunk: DiffChunk, chunkIndex: number): DiffChunk => {
       const fileState = expandedState[file.path];
       if (!fileState) return chunk;
+      if (!fileState.oldContent && !fileState.newContent) return chunk;
 
       const expandedUp = getExpandedCount(file.path, chunkIndex, 'up');
       const expandedDown = getExpandedCount(file.path, chunkIndex, 'down');

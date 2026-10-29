@@ -25,7 +25,8 @@ export function reconcileDiffResponse(
   if (!previous) return incoming;
   const sameContext =
     previous.baseCommitish === incoming.baseCommitish &&
-    previous.targetCommitish === incoming.targetCommitish &&
+    (previous.targetCommitish === incoming.targetCommitish ||
+      (previous.reviewId !== undefined && previous.reviewId === incoming.reviewId)) &&
     previous.repositoryId === incoming.repositoryId;
   const oldFiles = new Map(sameContext ? previous.files.map((file) => [file.path, file]) : []);
   const files = incoming.files.map((file) => {
@@ -41,4 +42,14 @@ export function reconcileDiffResponse(
   )
     return previous;
   return { ...incoming, files };
+}
+
+export function getReviewIntentKey(diff: DiffResponse | null, intent = 0): string {
+  return JSON.stringify([
+    diff?.repositoryId,
+    diff?.reviewId,
+    diff?.baseCommitish,
+    diff?.requestedBaseMode,
+    intent,
+  ]);
 }

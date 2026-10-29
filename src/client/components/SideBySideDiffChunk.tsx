@@ -18,7 +18,7 @@ import { useFileLevelTokensLookup } from '../contexts/FileLevelTokensContext';
 
 import { CommentButton } from './CommentButton';
 import { LineCommentForm as CommentForm, useCommentingLine } from './LiveCommentDraft';
-import { CommentThreadCard } from './CommentThreadCard';
+import { InlineCommentThreadCard } from './LiveCommentDraft';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { OpenInEditorButton } from './OpenInEditorButton';
 import type { AppearanceSettings } from './SettingsModal';
@@ -803,7 +803,7 @@ export function SideBySideDiffChunk({
                           >
                             <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'}`}>
                               <div className="m-2 mx-3">
-                                <CommentThreadCard
+                                <InlineCommentThreadCard
                                   thread={thread}
                                   showAuthorBadges={showAuthorBadges}
                                   onGeneratePrompt={onGenerateThreadPrompt}
