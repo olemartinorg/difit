@@ -56,7 +56,10 @@ function placeThread(entry: ThreadHost, slot: HTMLElement) {
     entry.focused.focus({ preventScroll: true });
     if (entry.top !== undefined) {
       for (let parent = slot.parentElement; parent; parent = parent.parentElement) {
-        if (/auto|scroll/.test(getComputedStyle(parent).overflowY)) {
+        if (
+          /auto|scroll/.test(getComputedStyle(parent).overflowY) &&
+          parent.scrollHeight > parent.clientHeight
+        ) {
           parent.scrollTop += entry.focused.getBoundingClientRect().top - entry.top;
           break;
         }
@@ -71,7 +74,13 @@ function StableThreadCard(props: ComponentProps<typeof CommentThreadCard>) {
   const context = useContext(ThreadContext);
   if (!context) throw new Error('A stable thread requires its live comment owner');
   const fallback = useRef<HTMLDivElement>(null);
-  const [entry] = useState<ThreadHost>(() => ({ node: document.createElement('div') }));
+  const [entry] = useState<ThreadHost>(() => {
+    const node = document.createElement('div');
+    // Saved-thread editors share the existing before/after row-layout owner,
+    // including later expanded-context commits after their slot has moved.
+    node.dataset.liveCommentEditor = 'true';
+    return { node };
+  });
   useLayoutEffect(() => {
     context.hosts.set(props.thread.id, entry);
     const slot = context.slots.get(props.thread.id) ?? (entry.placed ? fallback.current : null);

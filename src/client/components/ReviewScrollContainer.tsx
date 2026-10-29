@@ -20,13 +20,18 @@ export class ReviewScrollContainer extends Component<Props, object, Snapshot | n
   override getSnapshotBeforeUpdate(): Snapshot | null {
     const container = this.props.containerRef.current;
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const editor =
-      focused?.closest<HTMLElement>('[data-live-comment-editor]') ??
-      container?.querySelector<HTMLElement>('[data-live-comment-editor]');
-    const anchor = editor?.querySelector<HTMLElement>('textarea, form');
-    return editor && anchor
-      ? { editor, anchor, top: anchor.getBoundingClientRect().top, focused }
-      : null;
+    const editors = [
+      focused?.closest<HTMLElement>('[data-live-comment-editor]'),
+      ...(container?.querySelectorAll<HTMLElement>('[data-live-comment-editor]') ?? []),
+    ];
+    for (const editor of editors) {
+      // Closed saved threads share the portal marker but have no editor to
+      // preserve. Keep looking when focus is on a toolbar or other control.
+      const anchor = editor?.querySelector<HTMLElement>('textarea, form');
+      if (editor && anchor)
+        return { editor, anchor, top: anchor.getBoundingClientRect().top, focused };
+    }
+    return null;
   }
 
   override componentDidUpdate(_previous: Props, _state: object, snapshot: Snapshot | null) {
