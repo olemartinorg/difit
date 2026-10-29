@@ -977,6 +977,167 @@ describe('App Component - Comment sync', () => {
   });
 });
 
+describe('Markdown preview refresh acceptance', () => {
+  let hostRefresh: (() => void) | undefined;
+  const subject = {
+    repository: 'repo',
+    branch: 'feature',
+    head: 'a'.repeat(40),
+    checkout: { branch: 'feature', head: 'a'.repeat(40) },
+  };
+  const accepted: DiffResponse = {
+    ...mockDiffResponse,
+    targetCommitish: '.',
+    requestedTargetCommitish: '.',
+    reviewSubject: subject,
+    files: [
+      {
+        path: 'guide.md',
+        status: 'added',
+        additions: 1,
+        deletions: 0,
+        chunks: [],
+        newBlobId: 'b'.repeat(40),
+      },
+    ],
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWatchState.shouldReload = false;
+    mockWatchState.lastChangeType = null;
+    window.difitHost = {
+      captureReviewHandoffContext: () => undefined,
+      onRefresh: (callback) => {
+        hostRefresh = callback;
+        return () => {
+          if (hostRefresh === callback) hostRefresh = undefined;
+        };
+      },
+    };
+  });
+  afterEach(() => {
+    delete window.difitHost;
+    hostRefresh = undefined;
+  });
+  const refresh = () =>
+    act(() => {
+      expect(hostRefresh).toBeTypeOf('function');
+      hostRefresh!();
+    });
+
+  it('retries a rejected preview after the real refresh owner retains an identical response and subject', async () => {
+    let bodyRestored = false;
+    mockFetch(accepted);
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/blob/'))
+        return Promise.resolve(
+          bodyRestored
+            ? new Response('# Restored accepted body')
+            : new Response(JSON.stringify({ code: 'REVIEW_READ_CHANGED' }), { status: 409 }),
+        );
+      return fallback(input, init);
+    });
+    const reconcile = vi.spyOn(await import('./utils/stableDiff'), 'reconcileDiffResponse');
+    try {
+      renderApp();
+      const blobReads = () =>
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).startsWith('/api/blob/'));
+      await waitFor(() => expect(blobReads()).toHaveLength(1));
+      await waitFor(() => expect(reconcile).toHaveBeenCalledTimes(1));
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(blobReads()).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: 'Full Preview' })).not.toBeInTheDocument();
+      bodyRestored = true;
+      refresh();
+      fireEvent.click(await screen.findByRole('button', { name: 'Full Preview' }));
+      expect(
+        await screen.findByRole('heading', { name: 'Restored accepted body' }),
+      ).toBeInTheDocument();
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(reconcile.mock.results[1]!.value).toBe(reconcile.mock.results[0]!.value);
+      expect(blobReads()).toHaveLength(2);
+      expect(blobReads()[1]![0]).toBe(blobReads()[0]![0]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(blobReads()).toHaveLength(2);
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+
+  it('keeps Full Preview chosen through other-file acceptance, rejected revalidation and identical-refresh recovery', async () => {
+    let response = accepted;
+    let preview: 'healthy' | 'pending' = 'healthy';
+    let settlePreview: ((response: Response) => void) | undefined;
+    mockFetch(accepted);
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).startsWith('/api/diff'))
+        return Promise.resolve(new Response(JSON.stringify(response)));
+      if (String(input).startsWith('/api/blob/'))
+        return preview === 'healthy'
+          ? Promise.resolve(new Response('# Healthy full preview'))
+          : new Promise<Response>((resolve) => {
+              settlePreview = resolve;
+            });
+      return fallback(input, init);
+    });
+    const reconcile = vi.spyOn(await import('./utils/stableDiff'), 'reconcileDiffResponse');
+    try {
+      renderApp();
+      fireEvent.click(await screen.findByRole('button', { name: 'Full Preview' }));
+      expect(
+        await screen.findByRole('heading', { name: 'Healthy full preview' }),
+      ).toBeInTheDocument();
+      response = {
+        ...accepted,
+        reviewSubject: {
+          ...subject,
+          head: 'c'.repeat(40),
+          checkout: { ...subject.checkout, head: 'c'.repeat(40) },
+        },
+      };
+      preview = 'pending';
+      refresh();
+      await screen.findByText('Loading preview...');
+      expect(screen.getByRole('button', { name: 'Full Preview' })).toHaveClass(
+        'text-github-text-primary',
+      );
+      expect(screen.getByRole('button', { name: 'Diff Preview' })).toHaveClass(
+        'text-github-text-secondary',
+      );
+      await act(async () => {
+        settlePreview!(
+          new Response(JSON.stringify({ code: 'REVIEW_READ_CHANGED' }), { status: 409 }),
+        );
+      });
+      await screen.findByText(/Failed to fetch preview/);
+      expect(screen.getByRole('button', { name: 'Full Preview' })).toHaveClass(
+        'text-github-text-primary',
+      );
+      const blobReads = () =>
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).startsWith('/api/blob/'));
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(blobReads()).toHaveLength(2);
+      preview = 'healthy';
+      refresh();
+      expect(
+        await screen.findByRole('heading', { name: 'Healthy full preview' }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Full Preview' })).toHaveClass(
+        'text-github-text-primary',
+      );
+      expect(reconcile).toHaveBeenCalledTimes(3);
+      expect(reconcile.mock.results[2]!.value).toBe(reconcile.mock.results[1]!.value);
+      expect(blobReads()).toHaveLength(3);
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+      expect(blobReads()).toHaveLength(3);
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+});
+
 describe('App Component - Diff Mode Persistence', () => {
   it('initializes the selected view mode from localStorage', async () => {
     mockFetch(mockDiffResponse);
