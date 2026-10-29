@@ -15,7 +15,7 @@ export type ReviewSummaryRequest = {
   head: string;
   base?: string;
   checkout?: boolean;
-  publication?: { head: string; source: string };
+  publication?: { head: string; source: string } | null;
 };
 
 export class ReviewInventoryService {
@@ -43,6 +43,7 @@ export class ReviewInventoryService {
         (request.base !== undefined && typeof request.base !== 'string') ||
         (request.checkout !== undefined && typeof request.checkout !== 'boolean') ||
         (request.publication !== undefined &&
+          request.publication !== null &&
           (!request.publication ||
             typeof request.publication.head !== 'string' ||
             typeof request.publication.source !== 'string'))
@@ -352,9 +353,15 @@ export class ReviewInventoryService {
   private async getPublication(
     branchName: string,
     remotes: Array<{ name: string }>,
-    publication?: { head: string; source: string },
+    publication?: { head: string; source: string } | null,
     summary = false,
   ) {
+    if (publication === null)
+      return {
+        publicationHead: undefined,
+        publicationRemote: undefined,
+        publicationBranch: undefined,
+      };
     const resolvePublication = async (ref: string) => {
       try {
         const { stdout } = await execFile(
@@ -437,7 +444,7 @@ export class ReviewInventoryService {
     reviewedBranch?: string,
     reviewedHead?: string,
     checkout = false,
-    publication?: { head: string; source: string },
+    publication?: { head: string; source: string } | null,
   ) {
     const comparison = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
     const { head, targetHash, branchName, remotes } = comparison;
@@ -475,6 +482,11 @@ export class ReviewInventoryService {
           )
         : Promise.resolve(undefined),
     ]);
+    const uniqueCommits = !published.publicationHead
+      ? targetHash && !comparison.baseSuggestion.ambiguous
+        ? await count([head, '--not', targetHash])
+        : null
+      : undefined;
     await verifyCheckout();
     return {
       head,
@@ -487,6 +499,7 @@ export class ReviewInventoryService {
       availability: targetHash ? ('available' as const) : ('unavailable' as const),
       ahead,
       pushedAhead,
+      ...(uniqueCommits === undefined ? {} : { uniqueCommits }),
       behind,
       dirty: checkout ? dirty : null,
       edits,
