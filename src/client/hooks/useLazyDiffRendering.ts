@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { type DiffResponse } from '../../types/diff';
@@ -288,7 +289,7 @@ export function useLazyDiffRendering({
       generatedStatusCheckedRef.current.add(cacheKey);
 
       const encodedPath = encodeURIComponent(file.path);
-      fetch(`/api/generated-status/${encodedPath}?ref=${encodeURIComponent(ref)}`)
+      reviewFetch(`/api/generated-status/${encodedPath}?ref=${encodeURIComponent(ref)}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((payload: { isGenerated?: unknown } | null) => {
           if (!payload || payload.isGenerated !== true) return;

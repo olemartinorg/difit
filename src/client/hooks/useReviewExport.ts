@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import type { DiffCommentThread, DiffResponse, DiffSelection } from '../../types/diff';
 import type { CommentPromptDiffContext } from '../../utils/commentFormatting';
-import { normalizeBaseMode } from '../../utils/diffSelection';
+import { createDiffSelection, normalizeBaseMode } from '../../utils/diffSelection';
 import {
   DEFAULT_REVIEW_SETTINGS,
   formatReviewExport,
@@ -76,7 +76,16 @@ export function useReviewExport(options: ReviewExportOptions) {
           id: captured?.submissionId,
           reviewId: diff.reviewId,
           subject: diff.reviewSubject,
-          selection,
+          // A newer selection may still be loading while this accepted diff
+          // remains displayed. Submit the range that produced these bytes.
+          selection: {
+            ...createDiffSelection(
+              diff.requestedBaseCommitish ?? selection.baseCommitish,
+              diff.requestedTargetCommitish ?? selection.targetCommitish,
+              diff.requestedBaseMode,
+            ),
+            ...(diff.requestedIncludeUntracked ? { includeUntracked: true } : {}),
+          },
           resolvedSelection,
           commit: diff.commit,
           diffHash: await generateDiffHash(JSON.stringify(diff.files)),

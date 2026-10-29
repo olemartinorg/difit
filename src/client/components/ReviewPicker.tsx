@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   autoUpdate,
@@ -95,7 +96,7 @@ function CommitRow({
       target: commit.hash,
       ignoreWhitespace: String(ignoreWhitespace),
     });
-    void fetch(`/api/review/stats?${params}`, { signal: controller.signal })
+    void reviewFetch(`/api/review/stats?${params}`, { signal: controller.signal })
       .then(async (response) =>
         response.ok ? ((await response.json()) as ReviewStats) : undefined,
       )

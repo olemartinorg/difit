@@ -1,4 +1,8 @@
-import { assertReviewCheckout } from './review-identity.js';
+import {
+  admitReviewCheckout,
+  assertReviewCheckout,
+  ReviewReadChangedError,
+} from './review-identity.js';
 import type { ReviewSubject } from '../types/reviewSubmission.js';
 import { ReviewStore } from './review-store.js';
 import { registerReviewStore } from './review-store-api.js';
@@ -157,8 +161,11 @@ export async function startServer(
       return;
     }
     try {
-      const subject = JSON.parse(req.query.reviewSubject) as ReviewSubject;
-      await assertReviewCheckout(repositoryPath, subject);
+      const subject = await admitReviewCheckout(
+        repositoryPath,
+        JSON.parse(req.query.reviewSubject) as ReviewSubject,
+      );
+      res.locals.reviewSubject = subject;
       const send = res.send.bind(res);
       res.send = (body) => {
         if (res.statusCode >= 400) return send(body);
@@ -166,14 +173,23 @@ export async function startServer(
           () => send(body),
           (error) => {
             res.status(409);
-            send(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+            res.type('json');
+            send(
+              JSON.stringify({
+                error: error instanceof Error ? error.message : String(error),
+                ...(error instanceof ReviewReadChangedError ? { code: error.code } : {}),
+              }),
+            );
           },
         );
         return res;
       };
       next();
     } catch (error) {
-      res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+      res.status(409).json({
+        error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof ReviewReadChangedError ? { code: error.code } : {}),
+      });
     }
   });
 
@@ -354,7 +370,11 @@ export async function startServer(
 
     const selectedReview = options.stdinDiff
       ? undefined
-      : await reviewState.resolve(req, requestedSelection);
+      : await reviewState.resolve(
+          req,
+          requestedSelection,
+          res.locals.reviewSubject as ReviewSubject | undefined,
+        );
     res.json({
       ...responseDiffData,
       reviewId: selectedReview?.id,

@@ -5,6 +5,9 @@ export function captureReviewHandoffContext(): unknown {
 
 declare global {
   interface Window {
-    difitHost?: { captureReviewHandoffContext: () => unknown };
+    difitHost?: {
+      captureReviewHandoffContext: () => unknown;
+      onRefresh?: (callback: () => void) => () => void;
+    };
   }
 }

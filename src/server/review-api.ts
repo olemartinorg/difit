@@ -1,4 +1,8 @@
-import { assertReviewCheckout } from './review-identity.js';
+import {
+  admitReviewCheckout,
+  assertReviewCheckout,
+  ReviewReadChangedError,
+} from './review-identity.js';
 import type { Express } from 'express';
 
 import type { DiffSelection } from '../types/diff.js';
@@ -34,6 +38,7 @@ export class ReviewApi {
     const savedTarget = targets?.[contextKey];
     const capturedBase = subject?.pullRequest?.baseHead ?? subject?.baseHead ?? subject?.base;
     const selectedTarget = target ?? savedTarget ?? capturedBase;
+    subject = await admitReviewCheckout(this.repositoryPath, subject);
     await assertReviewCheckout(this.repositoryPath, subject);
     const inventory = await this.inventory.getInventory(
       selectedTarget,
@@ -98,9 +103,10 @@ export class ReviewApi {
         );
         res.json(inventory);
       } catch (error) {
-        res
-          .status(400)
-          .json({ error: error instanceof Error ? error.message : 'Could not load changes' });
+        res.status(400).json({
+          error: error instanceof Error ? error.message : 'Could not load changes',
+          ...(error instanceof ReviewReadChangedError ? { code: error.code } : {}),
+        });
       }
     });
 
@@ -113,10 +119,11 @@ export class ReviewApi {
       try {
         const branch =
           typeof req.query.reviewBranch === 'string' ? req.query.reviewBranch : this.reviewedBranch;
-        const subject =
+        const captured =
           typeof req.query.reviewSubject === 'string'
             ? (JSON.parse(req.query.reviewSubject) as ReviewSubject)
             : undefined;
+        const subject = await admitReviewCheckout(this.repositoryPath, captured);
         const inventory = await this.inventory.getInventory(
           body.target,
           false,
@@ -126,12 +133,13 @@ export class ReviewApi {
         );
         if (inventory.target !== body.target)
           throw new Error(`Target branch does not exist: ${body.target}`);
+        await assertReviewCheckout(this.repositoryPath, subject);
         const config = await readUserConfig();
         const targets = config.client.reviewTargets as Record<string, string> | undefined;
         await updateUserClientSettings({
           reviewTargets: {
             ...targets,
-            [`${this.repositoryId}:${branch ?? 'HEAD'}${subject?.pullRequest ? `:${subject.sourceRepository ?? ''}:${subject.head}:${subject.pullRequest.url}:${subject.pullRequest.baseHead ?? subject.pullRequest.base}` : ''}`]:
+            [`${this.repositoryId}:${branch ?? 'HEAD'}${captured?.pullRequest ? `:${captured.sourceRepository ?? ''}:${captured.head}:${captured.pullRequest.url}:${captured.pullRequest.baseHead ?? captured.pullRequest.base}` : ''}`]:
               body.target,
           },
         });

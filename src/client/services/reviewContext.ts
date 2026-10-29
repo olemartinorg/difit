@@ -34,6 +34,20 @@ export function commentURL(
   return reviewURL(path, params);
 }
 
-export function reviewFetch(path: string, init?: RequestInit): Promise<Response> {
-  return init === undefined ? fetch(reviewURL(path)) : fetch(reviewURL(path), init);
+export async function reviewFetch(path: string, init?: RequestInit): Promise<Response> {
+  // A changed revision invalidates only this read. Join it before reading the
+  // branch again; real failures and owner cancellation still reach the caller.
+  for (;;) {
+    init?.signal?.throwIfAborted();
+    const response = await (init === undefined
+      ? fetch(reviewURL(path))
+      : fetch(reviewURL(path), init));
+    if (response.ok || (init?.method && init.method !== 'GET')) return response;
+    const failure = (await response
+      .clone()
+      .json()
+      .catch(() => null)) as { code?: string } | null;
+    if (failure?.code !== 'REVIEW_READ_CHANGED') return response;
+    await response.arrayBuffer();
+  }
 }

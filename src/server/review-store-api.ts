@@ -20,11 +20,11 @@ export function registerReviewStore(
   const pending = new Map<string, Promise<string>>();
   const requestBody = (request: Request): unknown =>
     typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
-  const resolve = async (request: Request, selection?: DiffSelection) => {
+  const resolve = async (request: Request, selection?: DiffSelection, admitted?: ReviewSubject) => {
     const explicit =
       request.query.reviewId ??
       (requestBody(request) as { reviewId?: string } | undefined)?.reviewId;
-    if (typeof explicit === 'string') return options.store.get(explicit);
+    if (typeof explicit === 'string' && !selection) return options.store.get(explicit);
     const branch =
       typeof request.query.reviewBranch === 'string'
         ? request.query.reviewBranch
@@ -61,9 +61,10 @@ export function registerReviewStore(
         () => true,
       );
     const captured: ReviewSubject =
-      typeof request.query.reviewSubject === 'string'
+      admitted ??
+      (typeof request.query.reviewSubject === 'string'
         ? (JSON.parse(request.query.reviewSubject) as ReviewSubject)
-        : { repository: options.repoPath, branch, head, base, baseHead, working, unpublished };
+        : { repository: options.repoPath, branch, head, base, baseHead, working, unpublished });
     const subject: ReviewSubject = {
       ...captured,
       ...(selection ? { base, baseHead, comparisonHead: head, working } : {}),
@@ -74,14 +75,28 @@ export function registerReviewStore(
       !/^[a-f0-9]{40,64}$/.test(subject.head)
     )
       throw new Error('Invalid review subject');
+    if (typeof explicit === 'string') {
+      const review = options.store.get(explicit);
+      if (
+        subject.repository !== review.subject.repository ||
+        subject.branch !== review.subject.branch ||
+        subject.sourceRepository !== review.subject.sourceRepository
+      )
+        throw new Error('Review identity changed');
+      return { ...review, subject };
+    }
     const key = JSON.stringify(subject);
     let resolved = pending.get(key);
     if (!resolved) {
       resolved = options.store.resolve(options.repoPath, subject).then((value) => value.id);
       pending.set(key, resolved);
-      resolved.catch(() => pending.delete(key));
+      void resolved.finally(() => pending.delete(key)).catch(() => {});
     }
-    return options.store.get(await resolved);
+    const review = options.store.get(await resolved);
+    return {
+      ...review,
+      subject: { ...subject, sourceRepository: review.subject.sourceRepository },
+    };
   };
   app.get('/api/review-state', async (req, res) => {
     try {
@@ -216,9 +231,8 @@ export function registerReviewStore(
           : review.subject;
       const subject = { ...(body.subject ?? review.subject) };
       delete subject.checkout;
-      if (captured.checkout) subject.checkout = captured.checkout;
-      if (captured.checkout && subject.head !== captured.head)
-        throw new Error('Submitted review checkout changed');
+      if (captured.checkout)
+        subject.checkout = { branch: captured.checkout.branch, head: subject.head };
       if (
         subject.repository !== review.subject.repository ||
         subject.branch !== review.subject.branch ||

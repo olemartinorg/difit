@@ -27,7 +27,31 @@ export async function branchSource(repoPath: string, repository: string): Promis
   }
 }
 
-/** Rechecked before and after live reads, and immediately before submission. */
+export class ReviewReadChangedError extends Error {
+  readonly code = 'REVIEW_READ_CHANGED';
+}
+
+/** Admit a new read of the same logical branch at its current revision. */
+export async function admitReviewCheckout(
+  repoPath: string,
+  subject?: ReviewSubject,
+): Promise<ReviewSubject | undefined> {
+  if (!subject?.checkout) return subject;
+  const git = simpleGit(repoPath);
+  const branch = (
+    await git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')
+  ).trim();
+  if (branch !== subject.checkout.branch)
+    throw new Error(
+      'The checkout changed to another branch. Your captured review and notes have been kept.',
+    );
+  const head = (await git.revparse(['HEAD'])).trim();
+  const admitted = { ...subject, head, checkout: { branch, head } };
+  await assertReviewCheckout(repoPath, admitted);
+  return admitted;
+}
+
+/** Verify the revision admitted for this read, or the displayed submission. */
 export async function assertReviewCheckout(
   repoPath: string,
   subject?: ReviewSubject,
@@ -38,8 +62,12 @@ export async function assertReviewCheckout(
     git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => ''),
     git.revparse(['HEAD']),
   ]);
-  if (branch.trim() !== subject.checkout.branch || head.trim() !== subject.checkout.head)
+  if (branch.trim() !== subject.checkout.branch)
     throw new Error(
-      'The checkout changed. Reopen Review to use the current checkout. Your captured review and notes have been kept.',
+      'The checkout changed to another branch. Your captured review and notes have been kept.',
+    );
+  if (head.trim() !== subject.checkout.head)
+    throw new ReviewReadChangedError(
+      'The checkout changed during this read. Refresh to read the current branch.',
     );
 }

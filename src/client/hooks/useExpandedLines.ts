@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import { useState, useCallback, useRef, useEffect } from 'react';
 
 import {
@@ -50,7 +51,9 @@ async function fetchFileContent(
   commitish: string,
 ): Promise<{ lines: string[]; totalLines: number }> {
   const encodedPath = encodeURIComponent(filePath);
-  const response = await fetch(`/api/blob/${encodedPath}?ref=${encodeURIComponent(commitish)}`);
+  const response = await reviewFetch(
+    `/api/blob/${encodedPath}?ref=${encodeURIComponent(commitish)}`,
+  );
 
   if (!response.ok) {
     throw new Error(`Failed to fetch file content: ${response.statusText}`);
@@ -77,7 +80,7 @@ async function fetchLineCount(
   if (newRef) params.set('newRef', newRef);
   if (oldPath && oldPath !== filePath) params.set('oldPath', oldPath);
 
-  const response = await fetch(`/api/line-count/${encodedPath}?${params}`);
+  const response = await reviewFetch(`/api/line-count/${encodedPath}?${params}`);
   if (!response.ok) {
     throw new Error(`Failed to fetch line count: ${response.statusText}`);
   }

@@ -750,6 +750,14 @@ function App() {
     error: watchError,
   } = useFileWatch(handleWatchReload, handleCommentsChanged);
 
+  useEffect(
+    () =>
+      window.difitHost?.onRefresh?.(() => {
+        void reload();
+      }),
+    [reload],
+  );
+
   // Track which file the mouse is over so `v` works without a cursor
   const hoveredFileIndexRef = useRef<number | null>(null);
   const getHoveredFileIndex = useCallback(() => hoveredFileIndexRef.current, []);
@@ -1055,7 +1063,7 @@ function App() {
 
   // Fetch revision options on mount
   useEffect(() => {
-    fetch('/api/revisions')
+    reviewFetch('/api/revisions')
       .then((res) => (res.ok ? res.json() : null))
       .then((data: RevisionsResponse | null) => {
         setRevisionOptions(data);

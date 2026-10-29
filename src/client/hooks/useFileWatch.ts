@@ -47,6 +47,12 @@ export function useFileWatch(
 
       eventSource.onopen = () => {
         console.log('Connected to file watch service');
+        if (reconnectAttemptsRef.current > 0) {
+          // Changes made while disconnected may have no surviving SSE event.
+          changeSequenceRef.current++;
+          setReloadError(null);
+          setWatchState((prev) => ({ ...prev, shouldReload: true }));
+        }
         setWatchState((prev) => ({
           ...prev,
           connectionStatus: 'connected',
@@ -72,6 +78,11 @@ export function useFileWatch(
 
             case 'reload':
               changeSequenceRef.current++;
+              // A new change is new work, so an earlier failed read must not
+              // permanently disable automatic refresh. Identical failures stay
+              // idle until another event or an explicit refresh.
+              setReloadError(null);
+              setWatchError(null);
               console.log('File changes detected, showing reload button:', data.changeType);
               setWatchState((prev) => ({
                 ...prev,
@@ -167,9 +178,11 @@ export function useFileWatch(
     } catch (cause) {
       console.error('Reload failed:', cause);
       setReloadError(
-        cause instanceof Error && cause.message.trim()
-          ? cause.message
-          : 'Failed to reload diff data',
+        changeSequenceRef.current !== sequence
+          ? null
+          : cause instanceof Error && cause.message.trim()
+            ? cause.message
+            : 'Failed to reload diff data',
       );
 
       setWatchState((prev) => ({

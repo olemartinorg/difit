@@ -1,3 +1,4 @@
+import { reviewFetch } from '../services/reviewContext';
 import { diffLines } from 'diff';
 import React, { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -483,7 +484,7 @@ const isFetchableRef = (ref?: string) => Boolean(ref && ref !== 'stdin');
 
 const fetchNotebookContent = async (filePath: string, ref: string): Promise<string | null> => {
   const encodedPath = encodeURIComponent(filePath);
-  const response = await fetch(`/api/blob/${encodedPath}?ref=${encodeURIComponent(ref)}`);
+  const response = await reviewFetch(`/api/blob/${encodedPath}?ref=${encodeURIComponent(ref)}`);
   if (!response.ok) return null;
   return response.text();
 };
