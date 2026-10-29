@@ -21,6 +21,7 @@ export interface ReviewTarget {
 }
 
 export interface ReviewInventory {
+  reviewSubject?: import('./reviewSubmission.js').ReviewSubject;
   checkout?: boolean;
   repositoryId: string;
   branch: string;

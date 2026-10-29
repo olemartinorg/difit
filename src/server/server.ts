@@ -161,10 +161,11 @@ export async function startServer(
       return;
     }
     try {
-      const subject = await admitReviewCheckout(
-        repositoryPath,
-        JSON.parse(req.query.reviewSubject) as ReviewSubject,
-      );
+      const captured = JSON.parse(req.query.reviewSubject) as ReviewSubject;
+      const refresh =
+        req.path === '/diff' || req.path === '/review' || req.path === '/review/target';
+      const subject = refresh ? await admitReviewCheckout(repositoryPath, captured) : captured;
+      await assertReviewCheckout(repositoryPath, subject);
       res.locals.reviewSubject = subject;
       const send = res.send.bind(res);
       res.send = (body) => {

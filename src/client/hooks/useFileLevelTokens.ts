@@ -2,6 +2,8 @@ import { normalizeTokens, type Token } from 'prism-react-renderer';
 import { useEffect, useMemo, useState } from 'react';
 
 import { type DiffFile } from '../../types/diff';
+import type { ReviewSubject } from '../../types/reviewSubmission';
+import { reviewFetch } from '../services/reviewContext';
 import { getPrismLanguageFromFilename } from '../utils/languageDetection';
 import { loadPrismLanguage } from '../utils/languageLoader';
 import Prism from '../utils/prism';
@@ -19,10 +21,16 @@ const EMPTY: FileLevelTokens = { getOldTokens: null, getNewTokens: null };
 // of highlighting the entire blob; these fall back to per-line highlighting.
 const MAX_WHOLE_FILE_LINES = 2000;
 
-async function fetchBlobText(filePath: string, ref: string): Promise<string | null> {
+async function fetchBlobText(
+  filePath: string,
+  ref: string,
+  subject?: ReviewSubject,
+): Promise<string | null> {
   try {
-    const response = await fetch(
+    const response = await reviewFetch(
       `/api/blob/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(ref)}`,
+      undefined,
+      subject,
     );
     if (!response.ok) return null;
     return await response.text();
@@ -49,6 +57,7 @@ interface UseFileLevelTokensParams {
   baseCommitish?: string;
   targetCommitish?: string;
   reloadKey?: string | number;
+  reviewSubject?: ReviewSubject;
 }
 
 export function useFileLevelTokens({
@@ -57,6 +66,7 @@ export function useFileLevelTokens({
   baseCommitish,
   targetCommitish,
   reloadKey,
+  reviewSubject,
 }: UseFileLevelTokensParams): FileLevelTokens {
   const language = useMemo(() => getPrismLanguageFromFilename(file.path), [file.path]);
   const isStdinDiff = baseCommitish === 'stdin' || targetCommitish === 'stdin';
@@ -100,12 +110,12 @@ export function useFileLevelTokens({
 
     if (needOld) {
       const oldPath = file.oldPath || file.path;
-      void fetchBlobText(oldPath, baseCommitish as string).then((text) => {
+      void fetchBlobText(oldPath, baseCommitish as string, reviewSubject).then((text) => {
         if (!cancelled) setOldContent(text);
       });
     }
     if (needNew) {
-      void fetchBlobText(file.path, targetCommitish as string).then((text) => {
+      void fetchBlobText(file.path, targetCommitish as string, reviewSubject).then((text) => {
         if (!cancelled) setNewContent(text);
       });
     }
@@ -121,6 +131,7 @@ export function useFileLevelTokens({
     targetCommitish,
     reloadKey,
     isStdinDiff,
+    reviewSubject,
   ]);
 
   const oldTokens = useMemo<Token[][] | null>(() => {

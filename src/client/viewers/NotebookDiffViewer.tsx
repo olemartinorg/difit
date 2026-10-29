@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import type { DiffLine } from '../../types/diff';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 import { EnhancedPrismSyntaxHighlighter } from '../components/EnhancedPrismSyntaxHighlighter';
 import { PrismSyntaxHighlighter } from '../components/PrismSyntaxHighlighter';
 import type { MergedChunk } from '../hooks/useExpandedLines';
@@ -482,9 +483,17 @@ const buildSourceLines = (text: string, type: PreviewLineType): NotebookSourceLi
 
 const isFetchableRef = (ref?: string) => Boolean(ref && ref !== 'stdin');
 
-const fetchNotebookContent = async (filePath: string, ref: string): Promise<string | null> => {
+const fetchNotebookContent = async (
+  filePath: string,
+  ref: string,
+  subject?: ReviewSubject,
+): Promise<string | null> => {
   const encodedPath = encodeURIComponent(filePath);
-  const response = await reviewFetch(`/api/blob/${encodedPath}?ref=${encodeURIComponent(ref)}`);
+  const response = await reviewFetch(
+    `/api/blob/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+    undefined,
+    subject,
+  );
   if (!response.ok) return null;
   return response.text();
 };
@@ -944,7 +953,7 @@ const NotebookFullPreview = ({
 );
 
 export function NotebookDiffViewer(props: DiffViewerBodyProps) {
-  const { file, baseCommitish, targetCommitish } = props;
+  const { file, baseCommitish, targetCommitish, reviewSubject } = props;
   const [mode, setMode] = useState<PreviewMode>('diff');
   const fallbackPreview = useMemo(
     () => buildNotebookCellsFromDiff(props.mergedChunks),
@@ -1041,8 +1050,12 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
 
       try {
         const [oldText, newText] = await Promise.all([
-          canFetchOld ? fetchNotebookContent(oldPath, baseRef) : Promise.resolve(null),
-          canFetchNew ? fetchNotebookContent(file.path, targetRef) : Promise.resolve(null),
+          canFetchOld
+            ? fetchNotebookContent(oldPath, baseRef, reviewSubject)
+            : Promise.resolve(null),
+          canFetchNew
+            ? fetchNotebookContent(file.path, targetRef, reviewSubject)
+            : Promise.resolve(null),
         ]);
 
         const oldDoc = oldText ? parseNotebookContent(oldText) : null;
@@ -1123,6 +1136,7 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
     previewSourceKey,
     targetCommitish,
     fallbackPreview,
+    reviewSubject,
   ]);
 
   useEffect(() => {
@@ -1147,7 +1161,11 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
       setIsFullPreviewLoading(true);
       setFullPreviewError(null);
       try {
-        const text = await fetchNotebookContent(previewSource.path, previewSource.ref);
+        const text = await fetchNotebookContent(
+          previewSource.path,
+          previewSource.ref,
+          reviewSubject,
+        );
         if (!text) {
           throw new Error('Failed to load preview.');
         }
@@ -1187,6 +1205,7 @@ export function NotebookDiffViewer(props: DiffViewerBodyProps) {
     mode,
     previewSource,
     previewSourceKey,
+    reviewSubject,
   ]);
 
   const hasFullPreview = useMemo(

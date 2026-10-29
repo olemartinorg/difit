@@ -645,6 +645,7 @@ function App() {
     targetCommitish: diffData?.targetCommitish,
     diffIdentity: diffDataVersion,
     files: diffData?.files,
+    reviewSubject: diffData?.reviewSubject,
   });
 
   const getMergedChunksRef = useRef(getMergedChunks);
@@ -1859,6 +1860,7 @@ function App() {
                         syntaxTheme={settings.syntaxTheme}
                         baseCommitish={diffData.baseCommitish}
                         targetCommitish={diffData.targetCommitish}
+                        reviewSubject={diffData.reviewSubject}
                         cursor={cursor?.fileIndex === fileIndex ? cursor : null}
                         isFocused={cursor?.fileIndex === fileIndex}
                         fileIndex={fileIndex}

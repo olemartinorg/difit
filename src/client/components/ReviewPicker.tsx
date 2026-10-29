@@ -1,4 +1,5 @@
 import { reviewFetch } from '../services/reviewContext';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   autoUpdate,
@@ -82,11 +83,13 @@ function CommitRow({
   selected,
   ignoreWhitespace,
   onSelect,
+  reviewSubject,
 }: {
   commit: ReviewCommit;
   selected: boolean;
   ignoreWhitespace: boolean;
   onSelect: (ids: string[], only?: boolean) => void;
+  reviewSubject?: ReviewSubject;
 }) {
   const [stats, setStats] = useState<ReviewStats>();
   useEffect(() => {
@@ -96,7 +99,7 @@ function CommitRow({
       target: commit.hash,
       ignoreWhitespace: String(ignoreWhitespace),
     });
-    void reviewFetch(`/api/review/stats?${params}`, { signal: controller.signal })
+    void reviewFetch(`/api/review/stats?${params}`, { signal: controller.signal }, reviewSubject)
       .then(async (response) =>
         response.ok ? ((await response.json()) as ReviewStats) : undefined,
       )
@@ -105,7 +108,7 @@ function CommitRow({
       })
       .catch(() => {});
     return () => controller.abort();
-  }, [commit.hash, commit.parent, ignoreWhitespace]);
+  }, [commit.hash, commit.parent, ignoreWhitespace, reviewSubject]);
   return (
     <div
       className="flex items-center gap-2 rounded pl-2 py-2 hover:bg-github-bg-tertiary"
@@ -363,6 +366,7 @@ export function ReviewPicker({
                             selected={selected.has(commit.hash)}
                             ignoreWhitespace={ignoreWhitespace}
                             onSelect={onSelect}
+                            reviewSubject={inventory.reviewSubject}
                           />
                         ))}
                         {visible[group.id] < ids.length && (

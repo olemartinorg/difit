@@ -1,5 +1,6 @@
 import { reviewFetch } from '../services/reviewContext';
 import { useState, useCallback, useRef, useEffect } from 'react';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 
 import {
   type DiffFile,
@@ -16,6 +17,7 @@ interface UseExpandedLinesOptions {
   targetCommitish?: string;
   diffIdentity?: string | number;
   files?: DiffFile[];
+  reviewSubject?: ReviewSubject;
 }
 
 export interface MergedChunk extends DiffChunk {
@@ -49,10 +51,13 @@ interface UseExpandedLinesResult {
 async function fetchFileContent(
   filePath: string,
   commitish: string,
+  subject?: ReviewSubject,
 ): Promise<{ lines: string[]; totalLines: number }> {
   const encodedPath = encodeURIComponent(filePath);
   const response = await reviewFetch(
     `/api/blob/${encodedPath}?ref=${encodeURIComponent(commitish)}`,
+    undefined,
+    subject,
   );
 
   if (!response.ok) {
@@ -73,6 +78,7 @@ async function fetchLineCount(
   oldRef?: string,
   newRef?: string,
   oldPath?: string,
+  subject?: ReviewSubject,
 ): Promise<{ oldLineCount?: number; newLineCount?: number }> {
   const encodedPath = encodeURIComponent(filePath);
   const params = new URLSearchParams();
@@ -80,7 +86,11 @@ async function fetchLineCount(
   if (newRef) params.set('newRef', newRef);
   if (oldPath && oldPath !== filePath) params.set('oldPath', oldPath);
 
-  const response = await reviewFetch(`/api/line-count/${encodedPath}?${params}`);
+  const response = await reviewFetch(
+    `/api/line-count/${encodedPath}?${params}`,
+    undefined,
+    subject,
+  );
   if (!response.ok) {
     throw new Error(`Failed to fetch line count: ${response.statusText}`);
   }
@@ -92,6 +102,7 @@ export function useExpandedLines({
   targetCommitish,
   diffIdentity,
   files,
+  reviewSubject,
 }: UseExpandedLinesOptions): UseExpandedLinesResult {
   const isStdinDiff = baseCommitish === 'stdin' || targetCommitish === 'stdin';
   const [expandedState, setExpandedState] = useState<ExpandedLinesState>({});
@@ -161,7 +172,11 @@ export function useExpandedLines({
         if (file.status !== 'added' && baseCommitish) {
           const oldPath = file.oldPath || file.path;
           try {
-            const { lines, totalLines } = await fetchFileContent(oldPath, baseCommitish);
+            const { lines, totalLines } = await fetchFileContent(
+              oldPath,
+              baseCommitish,
+              reviewSubject,
+            );
             if (revisionGenerationRef.current !== revisionGeneration) {
               return null;
             }
@@ -169,15 +184,18 @@ export function useExpandedLines({
             state.oldTotalLines = totalLines;
           } catch (error) {
             console.error('Failed to fetch old file content:', error);
-            state.oldContent = [];
-            state.oldTotalLines = 0;
+            return null;
           }
         }
 
         // Fetch new content for modified/added/renamed files
         if (file.status !== 'deleted' && targetCommitish) {
           try {
-            const { lines, totalLines } = await fetchFileContent(file.path, targetCommitish);
+            const { lines, totalLines } = await fetchFileContent(
+              file.path,
+              targetCommitish,
+              reviewSubject,
+            );
             if (revisionGenerationRef.current !== revisionGeneration) {
               return null;
             }
@@ -185,8 +203,7 @@ export function useExpandedLines({
             state.newTotalLines = totalLines;
           } catch (error) {
             console.error('Failed to fetch new file content:', error);
-            state.newContent = [];
-            state.newTotalLines = 0;
+            return null;
           }
         }
 
@@ -201,7 +218,7 @@ export function useExpandedLines({
         pendingFetchesRef.current.delete(pendingFetchKey);
       }
     },
-    [baseCommitish, targetCommitish, isStdinDiff],
+    [baseCommitish, targetCommitish, isStdinDiff, reviewSubject],
   );
 
   const markFileUpdated = useCallback((filePath: string) => {
@@ -382,6 +399,7 @@ export function useExpandedLines({
           oldRef,
           newRef,
           file.oldPath,
+          reviewSubject,
         );
         if (revisionGenerationRef.current !== revisionGeneration) {
           return;
@@ -407,7 +425,7 @@ export function useExpandedLines({
         console.error('Failed to prefetch line count:', error);
       }
     },
-    [baseCommitish, targetCommitish, isStdinDiff, markFileUpdated],
+    [baseCommitish, targetCommitish, isStdinDiff, markFileUpdated, reviewSubject],
   );
 
   const getExpandedCount = useCallback(

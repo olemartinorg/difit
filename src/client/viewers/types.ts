@@ -4,6 +4,7 @@ import type { CommentThread, DiffFile, DiffSide, DiffViewMode, LineNumber } from
 import type { AppearanceSettings } from '../components/SettingsModal';
 import type { CursorPosition } from '../hooks/keyboardNavigation';
 import type { MergedChunk } from '../hooks/useExpandedLines';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 
 export type DiffViewerBodyProps = {
   file: DiffFile;
@@ -13,6 +14,7 @@ export type DiffViewerBodyProps = {
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   baseCommitish?: string;
   targetCommitish?: string;
+  reviewSubject?: ReviewSubject;
   cursor?: CursorPosition | null;
   fileIndex?: number;
   mergedChunks: MergedChunk[];

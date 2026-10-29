@@ -1,4 +1,5 @@
 import type { DiffSelection } from '../../types/diff';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 
 // Capture the subject when this document opens. Explicit selections can change
 // the compared range without changing that logical review.
@@ -34,15 +35,23 @@ export function commentURL(
   return reviewURL(path, params);
 }
 
-export async function reviewFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function reviewFetch(
+  path: string,
+  init?: RequestInit,
+  subject?: ReviewSubject,
+): Promise<Response> {
+  const parameters = new URLSearchParams();
+  if (subject) parameters.set('reviewSubject', JSON.stringify(subject));
+  const url = reviewURL(path, parameters);
+  const refresh = ['/api/diff', '/api/review'].includes(
+    new URL(url, window.location.origin).pathname,
+  );
   // A changed revision invalidates only this read. Join it before reading the
   // branch again; real failures and owner cancellation still reach the caller.
   for (;;) {
     init?.signal?.throwIfAborted();
-    const response = await (init === undefined
-      ? fetch(reviewURL(path))
-      : fetch(reviewURL(path), init));
-    if (response.ok || (init?.method && init.method !== 'GET')) return response;
+    const response = await (init === undefined ? fetch(url) : fetch(url, init));
+    if (response.ok || !refresh || (init?.method && init.method !== 'GET')) return response;
     const failure = (await response
       .clone()
       .json()

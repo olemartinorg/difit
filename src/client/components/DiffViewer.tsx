@@ -14,6 +14,7 @@ import { useFileLevelTokens } from '../hooks/useFileLevelTokens';
 import { isWholeFileHighlightExtension } from '../utils/languageDetection';
 import { getViewerForFile } from '../viewers/registry';
 import type { DiffViewerBodyProps } from '../viewers/types';
+import type { ReviewSubject } from '../../types/reviewSubmission';
 
 import { DiffViewerHeader } from './DiffViewerHeader';
 import type { AppearanceSettings } from './SettingsModal';
@@ -45,6 +46,7 @@ interface DiffViewerProps {
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   baseCommitish?: string;
   targetCommitish?: string;
+  reviewSubject?: ReviewSubject;
   cursor?: CursorPosition | null;
   isFocused?: boolean;
   fileIndex?: number;
@@ -196,6 +198,7 @@ export const DiffViewer = memo(function DiffViewer({
   syntaxTheme,
   baseCommitish,
   targetCommitish,
+  reviewSubject,
   cursor = null,
   isFocused = false,
   fileIndex = 0,
@@ -330,6 +333,7 @@ export const DiffViewer = memo(function DiffViewer({
     baseCommitish,
     targetCommitish,
     reloadKey: diffVersion,
+    reviewSubject,
   });
 
   const lineNumberWidth = '4em';
@@ -342,6 +346,7 @@ export const DiffViewer = memo(function DiffViewer({
     syntaxTheme,
     baseCommitish,
     targetCommitish,
+    reviewSubject,
     cursor,
     fileIndex,
     mergedChunks,
