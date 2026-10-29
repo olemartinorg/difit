@@ -241,6 +241,53 @@ describe('scoped review target API', () => {
     });
   });
 
+  it('pins saved and explicitly selected symbolic targets per document while retaining their preference labels', async () => {
+    const f = await fixture();
+    git('checkout', '-q', 'feature');
+    const subject = { ...f.subject, checkout: { branch: 'feature', head: f.head } };
+    const query = new URLSearchParams({
+      reviewBranch: 'feature',
+      reviewSubject: JSON.stringify(subject),
+    });
+    const key = `${repositoryId}:feature:fixture/repo:${f.head}:${subject.pullRequest!.url}:${f.declaredBase}`;
+    await updateUserClientSettings({ reviewTargets: { [key]: 'stacked-parent' } });
+    const initial = (await (
+      await fetch(`${f.origin}/api/review?${query}`)
+    ).json()) as ReviewInventory;
+    query.set('target', 'stacked-parent');
+    query.set('targetHead', initial.targetHash!);
+    query.set('comparisonBase', initial.branchBase);
+    git('branch', '-f', 'stacked-parent', f.head);
+    commit('live-after-base-moved.txt');
+    const pinned = (await (
+      await fetch(`${f.origin}/api/review?${query}`)
+    ).json()) as ReviewInventory;
+    expect(pinned.target).toBe('stacked-parent');
+    expect(pinned.targetHash).toBe(initial.targetHash);
+    expect(pinned.branchBase).toBe(initial.branchBase);
+    const changed = await fetch(`${f.origin}/api/review/target?${query}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'stacked-parent' }),
+    });
+    expect(changed.status).toBe(200);
+    expect(await changed.json()).toMatchObject({ targetHash: f.head });
+    expect(((await readUserConfig()).client.reviewTargets as Record<string, string>)[key]).toBe(
+      'stacked-parent',
+    );
+  });
+
+  it.each(['targetHead', 'comparisonBase'])(
+    'rejects an invalid captured %s without moving the base',
+    async (key) => {
+      const f = await fixture();
+      const query = new URLSearchParams({ [key]: 'stacked-parent' });
+      const response = await fetch(`${f.origin}/api/review?${query}`);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: `Invalid captured ${key}` });
+    },
+  );
+
   it.each([
     { localCommits: 2, dirty: true },
     { localCommits: 2, dirty: false },

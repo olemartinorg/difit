@@ -47,6 +47,38 @@ function inventory(target = 'trunk'): ReviewInventory {
 }
 
 describe('review inventory selection', () => {
+  it('pins the resolved target and base for background reads and repins only an explicit target choice', async () => {
+    const first = inventory(),
+      next = inventory('stacked-parent');
+    const fetcher = vi.mocked(fetch);
+    fetcher.mockImplementation(async (input, init) => {
+      if (init?.method === 'PUT')
+        return Response.json({ ok: true, targetHash: parent, branchBase: parent });
+      const url = new URL(String(input), 'http://localhost');
+      return Response.json(url.searchParams.get('target') === 'stacked-parent' ? next : first);
+    });
+    const { result } = renderHook(() => useReviewInventory(vi.fn(), true, false, false));
+    await waitFor(() => expect(result.current.inventory).not.toBeNull());
+    await act(async () => {
+      await result.current.refresh();
+    });
+    let request = new URL(String(fetcher.mock.lastCall?.[0]), 'http://localhost');
+    expect(Object.fromEntries(request.searchParams)).toMatchObject({
+      target: 'trunk',
+      targetHead: base,
+      comparisonBase: base,
+    });
+    expect(new URLSearchParams(location.hash.slice(1)).get('reviewTargetHead')).toBe(base);
+    await act(async () => {
+      await result.current.changeTarget('stacked-parent');
+    });
+    request = new URL(String(fetcher.mock.lastCall?.[0]), 'http://localhost');
+    expect(Object.fromEntries(request.searchParams)).toMatchObject({
+      target: 'stacked-parent',
+      targetHead: parent,
+      comparisonBase: parent,
+    });
+  });
   beforeEach(() => {
     window.history.replaceState(null, '', '/');
     vi.stubGlobal('fetch', vi.fn());

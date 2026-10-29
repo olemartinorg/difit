@@ -71,9 +71,28 @@ it.each(['sha1', 'sha256'])(
       const inventory = (await response.json()) as ReviewInventory;
       expect(response.status, JSON.stringify(inventory)).toBe(200);
       expect(inventory.target).toBeUndefined();
+      expect(inventory.targetHash).toBeUndefined();
+      expect(inventory.baseSuggestion?.ref).toBeUndefined();
+      expect(inventory.baseSuggestion).toMatchObject({
+        ambiguous: true,
+        candidates: [],
+      });
       expect(inventory.branchBase).toBe(comparison.branchBase);
       expect(inventory.commits).toEqual([]);
       expect(inventory.uncommitted).toMatchObject({ additions: 14, deletions: 0 });
+      // A subsequent refresh pins the accepted empty-tree boundary. It remains
+      // a boundary with no comparison branch, rather than a selected target.
+      const pinnedContext = new URLSearchParams(context);
+      pinnedContext.set('target', comparison.branchBase);
+      pinnedContext.set('comparisonBase', comparison.branchBase);
+      const pinnedResponse = await fetch(`${origin}/api/review?${pinnedContext}`);
+      const pinnedInventory = (await pinnedResponse.json()) as ReviewInventory;
+      expect(pinnedResponse.status, JSON.stringify(pinnedInventory)).toBe(200);
+      expect(pinnedInventory.target).toBeUndefined();
+      expect(pinnedInventory.targetHash).toBeUndefined();
+      expect(pinnedInventory.branchBase).toBe(comparison.branchBase);
+      expect(pinnedInventory.commits).toEqual([]);
+      expect(pinnedInventory.baseSuggestion).toEqual(inventory.baseSuggestion);
       const selection = resolveReviewRange(inventory, getDefaultReviewRange(inventory));
       expect(selection).toEqual({
         baseCommitish: head,
