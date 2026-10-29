@@ -1,5 +1,6 @@
 import { commentURL, reviewFetch } from './services/reviewContext';
 import { commentOperations } from './services/commentOperations';
+import { loadReviewComments } from './services/reviewComments';
 import { ReviewDrafts } from './components/ReviewDrafts';
 import { Columns, AlignLeft } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -250,6 +251,7 @@ function App() {
   const hasBootstrappedComments =
     commentsContextKey !== null && commentsContextKey === bootstrappedCommentsKey;
   const bootstrappingCommentsKeyRef = useRef<string | null>(null);
+  const bootstrapThreadsRef = useRef<{ key: string; threads: DiffCommentThread[] } | null>(null);
   const skipNextCommentSyncRef = useRef(false);
   // Last server comment version seen; echoed back as baseVersion so the server can detect concurrent writes.
   const serverCommentVersionRef = useRef<number | null>(null);
@@ -263,6 +265,7 @@ function App() {
   useEffect(() => {
     serverCommentVersionRef.current = null;
     syncedThreadsRef.current = [];
+    bootstrapThreadsRef.current = null;
     setCommentSaveError(null);
   }, [commentsContextKey]);
 
@@ -305,7 +308,12 @@ function App() {
 
   const handleCommentsChanged = useCallback(
     async function refreshComments() {
-      if (pendingCommentSyncRef.current > 0) {
+      const pendingPrefix = `difit-pending-comments/${commentsContextKey}/`;
+      if (
+        bootstrappingCommentsKeyRef.current === commentsContextKey ||
+        pendingCommentSyncRef.current > 0 ||
+        Object.keys(localStorage).some((key) => key.startsWith(pendingPrefix))
+      ) {
         pendingCommentRefreshRef.current = true;
         return;
       }
@@ -410,6 +418,7 @@ function App() {
           syncedThreadsRef.current = result.threads;
           replaceThreads(result.threads);
         }
+        return result;
       } catch (cause) {
         if (commentsContextRef.current === capturedContext) setCommentSaveError(String(cause));
         throw cause;
@@ -1200,7 +1209,18 @@ function App() {
 
     pendingBootstrapAfterLocalResetRef.current = false;
 
+    if (bootstrapThreadsRef.current?.key !== commentsContextKey) {
+      const repository = diffData?.reviewId
+        ? `${diffData.repositoryId}/${diffData.reviewId}`
+        : diffData?.repositoryId;
+      bootstrapThreadsRef.current = {
+        key: commentsContextKey,
+        threads: loadReviewComments(repository).threads,
+      };
+    }
+    const initialThreads = bootstrapThreadsRef.current.threads;
     bootstrappingCommentsKeyRef.current = commentsContextKey;
+    let reconciled = false;
     let cancelled = false;
 
     const bootstrapComments = async () => {
@@ -1208,7 +1228,6 @@ function App() {
         // Repository-wide legacy comments have no trustworthy branch attribution.
         // Import them intact into the explicit unassigned collection first.
         if (diffData?.repositoryId) {
-          const { loadReviewComments } = await import('./services/reviewComments');
           const historical = loadReviewComments(diffData.repositoryId);
           if (historical.threads.length) {
             const imported = await reviewFetch('/api/reviews/unassigned', {
@@ -1252,8 +1271,30 @@ function App() {
           return;
         }
 
-        if (!adoptServerThreads(snapshot)) return;
-        setBootstrappedCommentsKey(commentsContextKey);
+        const repository = diffData?.reviewId
+          ? `${diffData.repositoryId}/${diffData.reviewId}`
+          : diffData?.repositoryId;
+        // The native cache is written synchronously by local edits, even before
+        // React commits their render. Only edits since bootstrap began belong
+        // in this write; the server retains every unrelated saved thread.
+        const localThreads = loadReviewComments(repository).threads;
+        if (commentOperations(initialThreads, localThreads).length) {
+          syncedThreadsRef.current = initialThreads;
+          serverCommentVersionRef.current = snapshot.version ?? null;
+          setBootstrappedCommentsKey(commentsContextKey);
+          const saved = await syncThreadsToServer(localThreads);
+          if (
+            saved?.threads &&
+            commentsContextRef.current === commentsContextKey &&
+            resetGeneration === reviewReset.generationRef.current &&
+            JSON.stringify(loadReviewComments(repository).threads) === JSON.stringify(localThreads)
+          )
+            adoptServerThreads({ version: saved.version, threads: saved.threads });
+        } else {
+          if (!adoptServerThreads(snapshot)) return;
+          setBootstrappedCommentsKey(commentsContextKey);
+        }
+        reconciled = true;
         setCommentSaveError(null);
       } catch (commentsError) {
         if (!cancelled) {
@@ -1263,6 +1304,7 @@ function App() {
       } finally {
         if (bootstrappingCommentsKeyRef.current === commentsContextKey) {
           bootstrappingCommentsKeyRef.current = null;
+          if (reconciled && pendingCommentRefreshRef.current) void handleCommentsChanged();
         }
       }
     };
@@ -1283,9 +1325,10 @@ function App() {
     hasLoadedComments,
     getCommentApiUrl,
     diffData?.repositoryId,
+    diffData?.reviewId,
     replaceThreads,
     syncThreadsToServer,
-    threads,
+    handleCommentsChanged,
     reviewReset.generationRef,
   ]);
 
