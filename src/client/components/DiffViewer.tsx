@@ -347,6 +347,7 @@ export const DiffViewer = memo(function DiffViewer({
     baseCommitish,
     targetCommitish,
     reviewSubject,
+    diffVersion,
     cursor,
     fileIndex,
     mergedChunks,

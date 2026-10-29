@@ -15,6 +15,7 @@ export type DiffViewerBodyProps = {
   baseCommitish?: string;
   targetCommitish?: string;
   reviewSubject?: ReviewSubject;
+  diffVersion?: number;
   cursor?: CursorPosition | null;
   fileIndex?: number;
   mergedChunks: MergedChunk[];

@@ -959,8 +959,10 @@ function App() {
         if (next !== diffDataRef.current) {
           diffDataRef.current = next;
           setDiffData(next);
-          setDiffDataVersion((prev) => prev + 1);
         }
+        // A successful acceptance can reconcile to identical diff objects.
+        // Deferred readers still need this refresh boundary to retry once.
+        setDiffDataVersion((prev) => prev + 1);
         setError(null);
         setRefreshError(null);
 

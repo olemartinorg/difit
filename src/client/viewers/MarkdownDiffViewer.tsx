@@ -649,7 +649,15 @@ const MarkdownFullPreview = ({
 };
 
 export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
-  const { file, baseCommitish, targetCommitish, mergedChunks, syntaxTheme, reviewSubject } = props;
+  const {
+    file,
+    baseCommitish,
+    targetCommitish,
+    mergedChunks,
+    syntaxTheme,
+    reviewSubject,
+    diffVersion,
+  } = props;
   const [mode, setMode] = useState<PreviewMode>('diff');
   const [contents, setContents] = useState<PreviewContents>({ base: null, target: null });
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -658,6 +666,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
   const [loadedSources, setLoadedSources] = useState<{
     key: string;
     subject: DiffViewerBodyProps['reviewSubject'];
+    version: number | undefined;
   } | null>(null);
   const previewBlocks = useMemo(() => buildPreviewBlocks(mergedChunks), [mergedChunks]);
   // Frontmatter can only appear in the diff when the first chunk starts at the
@@ -704,10 +713,12 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
     if (!baseKey && !targetKey) return null;
     return `${baseKey}|${targetKey}`;
   }, [previewSources]);
-  // A successful diff refresh supplies a new accepted subject, even when this
-  // file and its refs are unchanged. A rejected preview may retry once then.
+  // The refresh owner advances its version even when reconciliation retains
+  // identical diff/subject objects. A rejected preview may retry once then.
   const sourcesLoaded =
-    loadedSources?.key === previewSourcesKey && loadedSources?.subject === reviewSubject;
+    loadedSources?.key === previewSourcesKey &&
+    loadedSources?.subject === reviewSubject &&
+    loadedSources?.version === diffVersion;
 
   useEffect(() => {
     const baseSource =
@@ -775,7 +786,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
       }
 
       setContents({ base: nextBase, target: nextTarget });
-      setLoadedSources({ key: previewSourcesKey, subject: reviewSubject });
+      setLoadedSources({ key: previewSourcesKey, subject: reviewSubject, version: diffVersion });
 
       const baseFailed = baseSource !== null && baseResult.status === 'rejected';
       const targetFailed = targetSource !== null && targetResult.status === 'rejected';
@@ -808,7 +819,7 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
     return () => {
       isCanceled = true;
     };
-  }, [file.status, previewSources, previewSourcesKey, reviewSubject, sourcesLoaded]);
+  }, [file.status, previewSources, previewSourcesKey, reviewSubject, diffVersion, sourcesLoaded]);
 
   const fullPreviewContent = useMemo(
     () => (file.status === 'deleted' ? contents.base : contents.target),
@@ -820,16 +831,14 @@ export function MarkdownDiffViewer(props: DiffViewerBodyProps) {
     [fullPreviewContent, sourcesLoaded],
   );
 
-  useEffect(() => {
-    if (mode === 'full-preview' && !hasFullPreview) {
-      setMode('diff-preview');
-    }
-  }, [hasFullPreview, mode]);
-
   return (
     <div className="bg-github-bg-primary">
       <div className="flex items-center justify-between border-b border-github-border px-4 py-2">
-        <PreviewModeTabs mode={mode} hasFullPreview={hasFullPreview} onModeChange={setMode} />
+        <PreviewModeTabs
+          mode={mode}
+          hasFullPreview={hasFullPreview || mode === 'full-preview'}
+          onModeChange={setMode}
+        />
       </div>
 
       {mode === 'diff' && <TextDiffViewer {...props} />}
