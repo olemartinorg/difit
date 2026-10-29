@@ -36,6 +36,8 @@ export function useReviewInventory(
   const requestIdRef = useRef(0);
   const initialUrlRef = useRef(new URLSearchParams(window.location.hash.slice(1)));
   const targetRef = useRef(initialUrlRef.current.get('reviewTarget'));
+  const targetHeadRef = useRef(initialUrlRef.current.get('reviewTargetHead'));
+  const comparisonBaseRef = useRef(initialUrlRef.current.get('reviewBase'));
   const writeUrl = useCallback((nextRange: ReviewRange | null, target?: string) => {
     const params = new URLSearchParams();
     params.set('review', nextRange ? 'range' : 'empty');
@@ -44,6 +46,8 @@ export function useReviewInventory(
       params.set('newest', nextRange.newest);
     }
     if (target) params.set('reviewTarget', target);
+    if (targetHeadRef.current) params.set('reviewTargetHead', targetHeadRef.current);
+    if (comparisonBaseRef.current) params.set('reviewBase', comparisonBaseRef.current);
     window.history.replaceState(
       null,
       '',
@@ -59,11 +63,25 @@ export function useReviewInventory(
       const urlTarget = targetRef.current;
       const params = new URLSearchParams({ ignoreWhitespace: String(ignoreWhitespace) });
       if (urlTarget) params.set('target', urlTarget);
+      if (targetHeadRef.current) params.set('targetHead', targetHeadRef.current);
+      if (comparisonBaseRef.current) params.set('comparisonBase', comparisonBaseRef.current);
       const response = await reviewFetch(`/api/review?${params}`);
       const data = (await response.json()) as ReviewInventory & { error?: string };
       if (requestId !== requestIdRef.current) return activeRef.current;
       if (!response.ok) throw new Error(data.error || 'Could not load changes');
       if (!Array.isArray(data.commits) || !Array.isArray(data.targetOptions)) return;
+      targetRef.current = data.target ?? null;
+      targetHeadRef.current = data.targetHash ?? null;
+      comparisonBaseRef.current = data.branchBase;
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      if (data.target) hash.set('reviewTarget', data.target);
+      if (data.targetHash) hash.set('reviewTargetHead', data.targetHash);
+      hash.set('reviewBase', data.branchBase);
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${window.location.search}#${hash}`,
+      );
       const previous = inventoryRef.current;
       const changedBranch =
         previous && (previous.branch !== data.branch || previous.target !== data.target);
@@ -171,8 +189,11 @@ export function useReviewInventory(
           body: JSON.stringify({ target }),
         });
         if (!response.ok) throw new Error('Could not save the target branch');
+        const saved = (await response.json()) as { targetHash?: string; branchBase?: string };
         customizedRef.current = false;
         targetRef.current = target;
+        targetHeadRef.current = saved.targetHash ?? null;
+        comparisonBaseRef.current = saved.branchBase ?? null;
         activeRef.current = true;
         await refresh();
       } catch (cause) {

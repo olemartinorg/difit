@@ -31,6 +31,8 @@ export class ReviewApi {
     ignoreWhitespace = false,
     reviewedBranch = this.reviewedBranch,
     subject?: ReviewSubject,
+    targetHead?: string,
+    comparisonBase?: string,
   ) {
     const config = await readUserConfig();
     const targets = config.client.reviewTargets as Record<string, string> | undefined;
@@ -41,7 +43,7 @@ export class ReviewApi {
     subject = await admitReviewCheckout(this.repositoryPath, subject);
     await assertReviewCheckout(this.repositoryPath, subject);
     const inventory = await this.inventory.getInventory(
-      selectedTarget,
+      targetHead ?? selectedTarget,
       ignoreWhitespace,
       reviewedBranch,
       subject?.head,
@@ -49,7 +51,12 @@ export class ReviewApi {
       subject?.pullRequest
         ? { head: subject.pullRequest.head, source: subject.sourceRepository ?? '' }
         : undefined,
+      comparisonBase,
     );
+    // An empty-tree boundary is deliberately not a comparison branch. Only
+    // restore the selected label when inventory resolved an actual target.
+    if (selectedTarget && inventory.target !== undefined) inventory.target = selectedTarget;
+    inventory.reviewSubject = subject;
     await assertReviewCheckout(this.repositoryPath, subject);
     if (selectedTarget && inventory.target === selectedTarget) {
       inventory.baseSuggestion = {
@@ -93,6 +100,13 @@ export class ReviewApi {
         return;
       }
       try {
+        const pinnedOid = (key: 'targetHead' | 'comparisonBase') => {
+          const value = req.query[key];
+          if (value === undefined) return undefined;
+          if (typeof value !== 'string' || !/^[a-f0-9]{40,64}$/.test(value))
+            throw new Error(`Invalid captured ${key}`);
+          return value;
+        };
         const inventory = await this.getInventory(
           typeof req.query.target === 'string' ? req.query.target : undefined,
           req.query.ignoreWhitespace === 'true',
@@ -100,6 +114,8 @@ export class ReviewApi {
           typeof req.query.reviewSubject === 'string'
             ? (JSON.parse(req.query.reviewSubject) as ReviewSubject)
             : undefined,
+          pinnedOid('targetHead'),
+          pinnedOid('comparisonBase'),
         );
         res.json(inventory);
       } catch (error) {
@@ -144,7 +160,7 @@ export class ReviewApi {
           },
         });
         onTargetChange();
-        res.json({ ok: true });
+        res.json({ ok: true, targetHash: inventory.targetHash, branchBase: inventory.branchBase });
       } catch (error) {
         res
           .status(400)

@@ -500,18 +500,25 @@ export class ReviewInventoryService {
     reviewedHead?: string,
     checkout = false,
     publication?: { head: string; source: string },
+    comparisonBase?: string,
   ): Promise<ReviewInventory> {
     const {
       head,
       branchName,
       target,
       targetHash,
-      branchBase,
+      branchBase: discoveredBase,
       targetOptions,
       baseSuggestion,
       remotes,
       emptyTree,
     } = await this.getComparison(targetOverride, reviewedBranch, reviewedHead);
+    const branchBase =
+      comparisonBase === emptyTree
+        ? emptyTree
+        : comparisonBase
+          ? (await this.revparse([`${comparisonBase}^{commit}`])).trim()
+          : discoveredBase;
     const { publicationHead, publicationRemote } = await this.getPublication(
       branchName,
       remotes,
