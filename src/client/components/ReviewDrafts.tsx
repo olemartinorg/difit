@@ -1,4 +1,5 @@
 import { reviewFetch } from '../services/reviewContext';
+import { reportReviewError } from '../services/reviewErrors';
 import {
   createContext,
   useCallback,
@@ -17,58 +18,104 @@ const Context = createContext<{
   forms: Record<string, Form>;
   save(id: string, value: Form | null): void;
 } | null>(null);
-export function ReviewDrafts({ reviewId, children }: { reviewId?: string; children: ReactNode }) {
+export function ReviewDrafts({
+  reviewId,
+  refreshVersion,
+  children,
+}: {
+  reviewId?: string;
+  refreshVersion?: number;
+  children: ReactNode;
+}) {
   const [forms, setForms] = useState<Record<string, Form>>({});
   const [history, setHistory] = useState<
     Record<string, import('../../types/diff').DiffCommentThread[]>
   >({});
-  const [error, setError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [writeErrors, setWriteErrors] = useState<Record<string, string>>({});
+  const historyLoaded = useRef(false);
   const version = useRef(-1);
   const pending = useRef(0);
   const queue = useRef(Promise.resolve());
   const failed = useRef(false);
-  const currentId = useRef(reviewId);
-  currentId.current = reviewId;
+  const owner = useMemo(() => ({ reviewId }), [reviewId]);
+  const historyRequest = useRef<typeof owner | null>(null);
+  const currentOwner = useRef<typeof owner | null>(owner);
+  currentOwner.current = owner;
   useEffect(() => {
     version.current = -1;
+    historyLoaded.current = false;
     failed.current = false;
-    setError(null);
+    setReadError(null);
+    setHistoryError(null);
+    setWriteErrors({});
     setHistory({});
     setForms({});
     if (!reviewId) return;
     let live = true;
+    let nextRead = 0;
+    let settledRead = 0;
     const refresh = async () => {
+      const read = ++nextRead;
       try {
         const response = await reviewFetch(
           `/api/review-state?reviewId=${encodeURIComponent(reviewId)}`,
         );
-        if (!response.ok) throw new Error('Could not load saved review drafts');
+        if (!response.ok) throw new Error(`Review request failed (HTTP ${response.status})`);
         const data = (await response.json()) as { version: number; forms: Record<string, Form> };
-        if (live && !pending.current && !failed.current && data.version >= version.current) {
+        if (!live) return;
+        if (read >= settledRead) {
+          settledRead = read;
+          setReadError(null);
+        }
+        if (!pending.current && !failed.current && data.version >= version.current) {
           version.current = data.version;
           setForms(data.forms);
         }
       } catch (cause) {
-        if (live) setError(String(cause));
+        reportReviewError('draft refresh', cause);
+        if (live && read >= settledRead) {
+          settledRead = read;
+          setReadError('Saved drafts are unavailable. Your local text is kept.');
+        }
       }
     };
     void refresh();
-    void reviewFetch('/api/reviews/unassigned')
-      .then((response) => response.json())
-      .then((value) => {
-        if (live) setHistory(value as typeof history);
-      })
-      .catch((cause) => {
-        if (live) setError(String(cause));
-      });
     const timer = setInterval(() => {
       if (!pending.current) void refresh();
     }, 1500);
     return () => {
       live = false;
+      if (currentOwner.current === owner) currentOwner.current = null;
       clearInterval(timer);
     };
-  }, [reviewId]);
+  }, [reviewId, owner]);
+  useEffect(() => {
+    // History is loaded once per review. An existing refresh may recover a failed
+    // read, but healthy refreshes must not add history polling.
+    if (!reviewId || historyLoaded.current || historyRequest.current === owner) return;
+    historyRequest.current = owner;
+    void reviewFetch('/api/reviews/unassigned')
+      .then((response) => {
+        if (!response.ok) throw new Error(`Review request failed (HTTP ${response.status})`);
+        return response.json();
+      })
+      .then((value) => {
+        if (currentOwner.current === owner) {
+          historyLoaded.current = true;
+          setHistory(value as typeof history);
+          setHistoryError(null);
+        }
+      })
+      .catch((cause) => {
+        reportReviewError('historical comments', cause);
+        if (currentOwner.current === owner) setHistoryError('Historical comments are unavailable.');
+      })
+      .finally(() => {
+        if (historyRequest.current === owner) historyRequest.current = null;
+      });
+  }, [reviewId, refreshVersion, owner]);
   const save = useCallback(
     (id: string, value: Form | null, pendingId?: string) => {
       if (!reviewId) return;
@@ -95,26 +142,33 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
                 body: JSON.stringify({ writeId, operations: [{ kind: 'form', id, value }] }),
               },
             );
-            if (!response.ok)
-              throw new Error(
-                'Draft save failed. Your text is kept on this device; retry by editing it.',
-              );
+            if (!response.ok) throw new Error(`Review request failed (HTTP ${response.status})`);
             if (localStorage.getItem(key) === pendingValue) localStorage.removeItem(key);
-            if (currentId.current === reviewId) {
-              failed.current = false;
-              setError(null);
+            if (currentOwner.current === owner) {
+              failed.current = Object.keys(localStorage).some((key) =>
+                key.startsWith(`difit-pending-form/${reviewId}/`),
+              );
+              setWriteErrors((previous) => {
+                const next = { ...previous };
+                delete next[`form/${id}`];
+                return next;
+              });
             }
           } catch (cause) {
-            if (currentId.current === reviewId) {
+            reportReviewError('draft save', cause);
+            if (currentOwner.current === owner) {
               failed.current = true;
-              setError(String(cause));
+              setWriteErrors((previous) => ({
+                ...previous,
+                [`form/${id}`]: 'Draft save was not confirmed. Your text is kept on this device.',
+              }));
             }
           } finally {
             pending.current--;
           }
         });
     },
-    [reviewId],
+    [reviewId, owner],
   );
   useEffect(() => {
     if (!reviewId) return;
@@ -132,7 +186,32 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
   const contextValue = useMemo(() => ({ forms, save }), [forms, save]);
   return (
     <Context.Provider value={contextValue}>
-      {error && <div role="alert">{error}</div>}
+      {readError && (
+        <div role="alert">
+          {readError} <button onClick={() => setReadError(null)}>Dismiss</button>
+        </div>
+      )}
+      {historyError && (
+        <div role="alert">
+          {historyError} <button onClick={() => setHistoryError(null)}>Dismiss</button>
+        </div>
+      )}
+      {Object.entries(writeErrors).map(([key, message]) => (
+        <div role="alert" key={key}>
+          {message}{' '}
+          <button
+            onClick={() =>
+              setWriteErrors((previous) => {
+                const next = { ...previous };
+                delete next[key];
+                return next;
+              })
+            }
+          >
+            Dismiss
+          </button>
+        </div>
+      ))}
       {Object.keys(history).length > 0 && (
         <details className="m-2 rounded border border-github-border p-2 text-sm">
           <summary>Unassigned historical comments</summary>
@@ -148,14 +227,28 @@ export function ReviewDrafts({ reviewId, children }: { reviewId?: string; childr
                     { method: 'POST' },
                   )
                     .then((response) => {
-                      if (!response.ok) throw new Error('Could not assign historical comments');
+                      if (!response.ok)
+                        throw new Error(`Review request failed (HTTP ${response.status})`);
+                      if (currentOwner.current !== owner) return;
+                      setWriteErrors((previous) => {
+                        const next = { ...previous };
+                        delete next[`assign/${id}`];
+                        return next;
+                      });
                       setHistory((previous) => {
                         const next = { ...previous };
                         delete next[id];
                         return next;
                       });
                     })
-                    .catch((cause) => setError(String(cause)));
+                    .catch((cause) => {
+                      reportReviewError('assign historical comments', cause);
+                      if (currentOwner.current === owner)
+                        setWriteErrors((previous) => ({
+                          ...previous,
+                          [`assign/${id}`]: 'Comment assignment was not confirmed.',
+                        }));
+                    });
                 }}
               >
                 Assign to this review

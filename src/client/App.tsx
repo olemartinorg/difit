@@ -1,5 +1,6 @@
 import { commentURL, reviewFetch } from './services/reviewContext';
 import { commentOperations } from './services/commentOperations';
+import { reportReviewError } from './services/reviewErrors';
 import { loadReviewComments } from './services/reviewComments';
 import { ReviewDrafts } from './components/ReviewDrafts';
 import { Columns, AlignLeft } from 'lucide-react';
@@ -247,9 +248,12 @@ function App() {
     (path: string) => commentURL(path, diffData?.reviewId, resolvedSelection),
     [diffData?.reviewId, resolvedSelection],
   );
-  const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
+  const commentsOwner = useMemo(() => ({ key: commentsContextKey }), [commentsContextKey]);
+  const [bootstrappedCommentsOwner, setBootstrappedCommentsOwner] = useState<
+    typeof commentsOwner | null
+  >(null);
   const hasBootstrappedComments =
-    commentsContextKey !== null && commentsContextKey === bootstrappedCommentsKey;
+    commentsContextKey !== null && commentsOwner === bootstrappedCommentsOwner;
   const bootstrappingCommentsRef = useRef<{ key: string } | null>(null);
   const bootstrapThreadsRef = useRef<{
     key: string;
@@ -262,8 +266,12 @@ function App() {
   const serverCommentVersionRef = useRef<number | null>(null);
   const syncedThreadsRef = useRef<DiffCommentThread[]>([]);
   const saveQueueRef = useRef(Promise.resolve());
-  const commentsContextRef = useRef(commentsContextKey);
-  commentsContextRef.current = commentsContextKey;
+  const commentsOwnerRef = useRef(commentsOwner);
+  commentsOwnerRef.current = commentsOwner;
+  const commentReadSequence = useRef({ next: 0, settled: 0 });
+  const [commentReadError, setCommentReadError] = useState<string | null>(null);
+  const bootstrapReadFailedRef = useRef(false);
+  const bootstrapWriteFailedRef = useRef(false);
   const [commentSaveError, setCommentSaveError] = useState<string | null>(null);
   const pendingBootstrapAfterLocalResetRef = useRef(false);
 
@@ -272,18 +280,27 @@ function App() {
     syncedThreadsRef.current = [];
     bootstrapThreadsRef.current = null;
     setCommentSaveError(null);
+    setCommentReadError(null);
+    bootstrapReadFailedRef.current = false;
+    bootstrapWriteFailedRef.current = false;
   }, [commentsContextKey]);
 
+  // A normal successful diff refresh can recover a failed bootstrap read, even
+  // when the diff object is unchanged. It must never replay an uncertain write.
   useEffect(() => {
-    if (commentsContextKey !== bootstrappedCommentsKey) {
+    if (bootstrapReadFailedRef.current) setCommentBootstrapRetry((retry) => retry + 1);
+  }, [diffDataVersion]);
+
+  useEffect(() => {
+    if (commentsOwner !== bootstrappedCommentsOwner) {
       skipNextCommentSyncRef.current = false;
     }
-  }, [bootstrappedCommentsKey, commentsContextKey]);
+  }, [bootstrappedCommentsOwner, commentsOwner]);
 
   const fetchServerThreads = useCallback(async () => {
     const response = await fetch(getCommentApiUrl('/api/comments-json'));
     if (!response.ok) {
-      throw new Error(`Failed to fetch comments: ${response.status} ${response.statusText}`);
+      throw new Error(`Review request failed (HTTP ${response.status})`);
     }
     const payload = (await response.json()) as {
       version?: number;
@@ -313,6 +330,7 @@ function App() {
 
   const handleCommentsChanged = useCallback(
     async function refreshComments() {
+      if (commentsOwnerRef.current !== commentsOwner) return;
       const pendingPrefix = `difit-pending-comments/${commentsContextKey}/`;
       if (
         bootstrappingCommentsRef.current?.key === commentsContextKey ||
@@ -336,11 +354,16 @@ function App() {
       pendingCommentRefreshRef.current = false;
       const originalThreads = latestThreadsRef.current;
       const generation = reviewReset.generationRef.current;
-      const capturedContext = commentsContextKey;
+      const capturedOwner = commentsOwner;
+      const read = ++commentReadSequence.current.next;
       try {
         const snapshot = await fetchServerThreads();
-        if (commentsContextRef.current !== capturedContext) return;
+        if (commentsOwnerRef.current !== capturedOwner) return;
         if (generation !== reviewReset.generationRef.current) return;
+        if (read >= commentReadSequence.current.settled) {
+          commentReadSequence.current.settled = read;
+          setCommentReadError(null);
+        }
         // A local edit made while this read was pending has its own sync request.
         // Read again after it settles instead of adopting this older snapshot.
         if (latestThreadsRef.current !== originalThreads || pendingCommentSyncRef.current > 0) {
@@ -350,14 +373,30 @@ function App() {
         }
         if (!adoptServerThreads(snapshot)) return;
         if (commentsContextKey) {
-          setBootstrappedCommentsKey(commentsContextKey);
+          setBootstrappedCommentsOwner(commentsOwner);
         }
       } catch (commentsError) {
-        console.error('Failed to refresh comments from server:', commentsError);
+        reportReviewError('comment refresh', commentsError);
+        if (
+          commentsOwnerRef.current === capturedOwner &&
+          read >= commentReadSequence.current.settled &&
+          generation === reviewReset.generationRef.current
+        ) {
+          commentReadSequence.current.settled = read;
+          setCommentReadError('Saved comments are unavailable. Your local comments are kept.');
+        }
       }
     },
-    [commentsContextKey, fetchServerThreads, adoptServerThreads, reviewReset.generationRef],
+    [
+      commentsContextKey,
+      commentsOwner,
+      fetchServerThreads,
+      adoptServerThreads,
+      reviewReset.generationRef,
+    ],
   );
+  const currentCommentsRefresh = useRef(handleCommentsChanged);
+  currentCommentsRefresh.current = handleCommentsChanged;
 
   const syncThreadsToServer = useCallback(
     async (nextThreads: DiffCommentThread[]) => {
@@ -365,6 +404,7 @@ function App() {
       syncedThreadsRef.current = nextThreads;
       if (!operations.length) return;
       const capturedContext = commentsContextKey;
+      const capturedOwner = commentsOwner;
       const writeId = crypto.randomUUID();
       const pendingKey = `difit-pending-comments/${capturedContext}/${writeId}`;
       localStorage.setItem(pendingKey, JSON.stringify({ operations, writeId }));
@@ -389,10 +429,7 @@ function App() {
             headers: { 'content-type': 'application/json' },
             body: localStorage.getItem(key),
           });
-          if (!recovered.ok)
-            throw new Error(
-              'Earlier review saves are still pending. Your comments remain on this device.',
-            );
+          if (!recovered.ok) throw new Error(`Review request failed (HTTP ${recovered.status})`);
           localStorage.removeItem(key);
         }
         const response = await fetch(getCommentApiUrl('/api/comments'), {
@@ -404,12 +441,9 @@ function App() {
             baseVersion: serverCommentVersionRef.current ?? undefined,
           }),
         });
-        if (!response.ok)
-          throw new Error(
-            'Review save failed. Your comments remain on this device. Retry by editing the comment.',
-          );
+        if (!response.ok) throw new Error(`Review request failed (HTTP ${response.status})`);
         localStorage.removeItem(pendingKey);
-        if (commentsContextRef.current !== capturedContext) return;
+        if (commentsOwnerRef.current !== capturedOwner) return;
         setCommentSaveError(null);
 
         const result = (await response.json()) as {
@@ -417,6 +451,7 @@ function App() {
           merged?: boolean;
           threads?: DiffCommentThread[];
         };
+        if (commentsOwnerRef.current !== capturedOwner) return;
         if (typeof result.version === 'number') {
           serverCommentVersionRef.current = Math.max(
             serverCommentVersionRef.current ?? 0,
@@ -436,20 +471,23 @@ function App() {
         }
         return result;
       } catch (cause) {
-        if (commentsContextRef.current === capturedContext) setCommentSaveError(String(cause));
+        if (commentsOwnerRef.current === capturedOwner)
+          setCommentSaveError(
+            'Review save was not confirmed. Your comments remain on this device.',
+          );
         throw cause;
       } finally {
         finishSave();
         pendingCommentSyncRef.current--;
         if (pendingCommentSyncRef.current === 0 && pendingCommentRefreshRef.current) {
-          void handleCommentsChanged();
+          void currentCommentsRefresh.current();
         }
       }
     },
     [
       commentsContextKey,
+      commentsOwner,
       getCommentApiUrl,
-      handleCommentsChanged,
       replaceThreads,
       reviewReset.generationRef,
     ],
@@ -1213,11 +1251,14 @@ function App() {
       return;
     }
 
-    if (bootstrappedCommentsKey === commentsContextKey) {
+    if (bootstrappedCommentsOwner === commentsOwner) {
       return;
     }
 
-    if (bootstrappingCommentsRef.current?.key === commentsContextKey) {
+    if (
+      bootstrappingCommentsRef.current?.key === commentsContextKey ||
+      bootstrapWriteFailedRef.current
+    ) {
       return;
     }
 
@@ -1243,19 +1284,20 @@ function App() {
     let cancelled = false;
 
     const bootstrapComments = async () => {
+      let stage: 'read' | 'write' = 'read';
       try {
         // Repository-wide legacy comments have no trustworthy branch attribution.
         // Import them intact into the explicit unassigned collection first.
         if (diffData?.repositoryId) {
           const historical = loadReviewComments(diffData.repositoryId);
           if (historical.threads.length) {
+            stage = 'write';
             const imported = await reviewFetch('/api/reviews/unassigned', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ threads: historical.threads }),
             });
-            if (!imported.ok)
-              throw new Error('Historical comments could not be preserved on the host');
+            if (!imported.ok) throw new Error(`Review request failed (HTTP ${imported.status})`);
             const verified = (await imported.json()) as { count: number; messageCount: number };
             if (
               verified.count !== historical.threads.length ||
@@ -1270,26 +1312,27 @@ function App() {
           localStorage.key(index),
         ).filter((key): key is string => !!key?.startsWith(pendingPrefix));
         for (const key of pendingKeys) {
+          stage = 'write';
           const response = await fetch(getCommentApiUrl('/api/comments'), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: localStorage.getItem(key),
           });
-          if (!response.ok)
-            throw new Error(
-              'Pending comment saves could not be recovered. Your comments remain on this device.',
-            );
+          if (!response.ok) throw new Error(`Review request failed (HTTP ${response.status})`);
           localStorage.removeItem(key);
         }
+        stage = 'read';
         const snapshot = await fetchServerThreads();
         if (
           cancelled ||
-          commentsContextRef.current !== commentsContextKey ||
+          commentsOwnerRef.current !== commentsOwner ||
           resetGeneration !== reviewReset.generationRef.current
         ) {
           return;
         }
 
+        bootstrapReadFailedRef.current = false;
+        setCommentReadError(null);
         const repository = diffData?.reviewId
           ? `${diffData.repositoryId}/${diffData.reviewId}`
           : diffData?.repositoryId;
@@ -1301,11 +1344,12 @@ function App() {
           syncedThreadsRef.current = initialThreads;
           serverCommentVersionRef.current = snapshot.version ?? null;
           baseline.reconciled = true;
-          setBootstrappedCommentsKey(commentsContextKey);
+          setBootstrappedCommentsOwner(commentsOwner);
+          stage = 'write';
           const saved = await syncThreadsToServer(localThreads);
           if (
             saved?.threads &&
-            commentsContextRef.current === commentsContextKey &&
+            commentsOwnerRef.current === commentsOwner &&
             resetGeneration === reviewReset.generationRef.current &&
             JSON.stringify(loadReviewComments(repository).threads) === JSON.stringify(localThreads)
           )
@@ -1313,14 +1357,25 @@ function App() {
         } else {
           if (!adoptServerThreads(snapshot)) return;
           baseline.reconciled = true;
-          setBootstrappedCommentsKey(commentsContextKey);
+          setBootstrappedCommentsOwner(commentsOwner);
         }
         reconciled = true;
-        setCommentSaveError(null);
       } catch (commentsError) {
-        if (!cancelled) {
-          console.error('Failed to bootstrap comments from server:', commentsError);
-          setCommentSaveError(String(commentsError));
+        reportReviewError('comment bootstrap', commentsError);
+        if (
+          !cancelled &&
+          commentsOwnerRef.current === commentsOwner &&
+          resetGeneration === reviewReset.generationRef.current
+        ) {
+          if (stage === 'read') {
+            bootstrapReadFailedRef.current = true;
+            setCommentReadError('Saved comments are unavailable. Your local comments are kept.');
+          } else {
+            bootstrapWriteFailedRef.current = true;
+            setCommentSaveError(
+              'Review save was not confirmed. Your comments remain on this device.',
+            );
+          }
         }
       } finally {
         if (bootstrappingCommentsRef.current === attempt) {
@@ -1339,9 +1394,10 @@ function App() {
       }
     };
   }, [
-    bootstrappedCommentsKey,
+    bootstrappedCommentsOwner,
     commentBootstrapRetry,
     commentsContextKey,
+    commentsOwner,
     fetchServerThreads,
     adoptServerThreads,
     hasLoadedComments,
@@ -1385,7 +1441,7 @@ function App() {
     }
 
     syncThreadsToServer(threads).catch((syncError) => {
-      console.error('Failed to sync comments:', syncError);
+      reportReviewError('comment sync', syncError);
     });
   }, [getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
 
@@ -1554,8 +1610,21 @@ function App() {
   );
 
   return (
-    <ReviewDrafts key={diffData?.reviewId} reviewId={diffData?.reviewId}>
-      {commentSaveError && <div role="alert">{commentSaveError}</div>}
+    <ReviewDrafts
+      key={diffData?.reviewId}
+      reviewId={diffData?.reviewId}
+      refreshVersion={diffDataVersion}
+    >
+      {commentReadError && (
+        <div role="alert">
+          {commentReadError} <button onClick={() => setCommentReadError(null)}>Dismiss</button>
+        </div>
+      )}
+      {commentSaveError && (
+        <div role="alert">
+          {commentSaveError} <button onClick={() => setCommentSaveError(null)}>Dismiss</button>
+        </div>
+      )}
       <WordHighlightProvider>
         <div
           className="h-screen flex flex-col"
