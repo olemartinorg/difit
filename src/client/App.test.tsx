@@ -1800,6 +1800,13 @@ describe('notes submitted during initial comment loading', () => {
   it.each([
     { scenario: 'successful bootstrap', rejectSave: false, overlap: false, failRead: false },
     { scenario: 'rejected save', rejectSave: true, overlap: false, failRead: false },
+    {
+      scenario: 'unknown save outcome',
+      rejectSave: true,
+      unknownSave: true,
+      overlap: false,
+      failRead: false,
+    },
     { scenario: 'superseded bootstrap read', rejectSave: false, overlap: true, failRead: false },
     {
       scenario: 'notification after rejected bootstrap',
@@ -1809,7 +1816,7 @@ describe('notes submitted during initial comment loading', () => {
     },
   ])(
     'keeps a first note and existing server threads: $scenario',
-    async ({ rejectSave, overlap, failRead }) => {
+    async ({ rejectSave, overlap, failRead, unknownSave }) => {
       const repository = 'bootstrap-repository',
         review = 'bootstrap-review';
       const cacheKey = `difit-review-comments-v1/${repository}/${review}`;
@@ -1884,7 +1891,8 @@ describe('notes submitted during initial comment loading', () => {
           const write = JSON.parse(String(init.body)) as Write;
           if (write.operations.some((op) => op.kind !== 'form')) {
             writes.push(write);
-            if (rejectSave) return Response.json({ error: 'Save rejected' }, { status: 503 });
+            if (rejectSave && !unknownSave)
+              return Response.json({ error: 'Save rejected' }, { status: 503 });
             if (!accepted.has(write.writeId)) {
               for (const op of write.operations) {
                 if (op.kind === 'thread') serverThreads.push(op.value as DiffCommentThread);
@@ -1897,6 +1905,8 @@ describe('notes submitted during initial comment loading', () => {
               }
               accepted.add(write.writeId);
             }
+            // The native owner accepted this write, but its reply was lost.
+            if (rejectSave && unknownSave) throw new TypeError('Failed to fetch');
           }
           return Response.json({ version: 2, merged: true, threads: serverThreads });
         }
@@ -1934,7 +1944,7 @@ describe('notes submitted during initial comment loading', () => {
       });
       if (failRead) {
         await waitFor(() =>
-          expect(document.body).toHaveTextContent('Failed to fetch comments: 503'),
+          expect(document.body).toHaveTextContent('Saved comments are unavailable'),
         );
       }
       if (overlap || failRead) {
@@ -1964,13 +1974,20 @@ describe('notes submitted during initial comment loading', () => {
       expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
       expect(screen.queryByPlaceholderText('Leave a comment...')).not.toBeInTheDocument();
       if (rejectSave) {
-        await waitFor(() => expect(document.body).toHaveTextContent('Review save failed'));
+        await waitFor(() =>
+          expect(document.body).toHaveTextContent('Review save was not confirmed'),
+        );
         const pendingPrefix = `difit-pending-comments/${review}/`;
         expect(Object.keys(localStorage).some((key) => key.startsWith(pendingPrefix))).toBe(true);
         await act(async () => {
           await mockCommentsChanged?.();
         });
         expect(localStorage.getItem(cacheKey)).toContain('Keep the first note');
+        await act(async () => {
+          await mockReloadDiff?.();
+        });
+        expect(writes).toHaveLength(1);
+        expect(document.body).toHaveTextContent('Review save was not confirmed');
         rejectSave = false;
         const note = screen.getByText('Keep the first note').closest('[data-live-comment-editor]')!;
         fireEvent.click(within(note as HTMLElement).getByTitle('Edit message'));
@@ -1996,4 +2013,244 @@ describe('notes submitted during initial comment loading', () => {
       ).toHaveLength(0);
     },
   );
+});
+
+describe('comment read feedback recovery', () => {
+  beforeEach(() => {
+    mockFetch(mockDiffResponse);
+  });
+
+  it('recovers a failed bootstrap through an identical normal diff refresh without a write', async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    let failRead = true;
+    const writes: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).startsWith('/api/comments-json') && failRead)
+        throw new TypeError('Failed to fetch');
+      if (init?.method === 'POST') writes.push(String(input));
+      return defaultFetch(input, init);
+    });
+    renderApp();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Saved comments are unavailable');
+    expect(screen.queryByRole('button', { name: /^Retry$/ })).not.toBeInTheDocument();
+    failRead = false;
+    await act(async () => {
+      await mockReloadDiff?.();
+    });
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(writes).toHaveLength(0);
+  });
+
+  it('clears only its read failure on an unchanged-version notification and supports dismissal', async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    let failRead = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).startsWith('/api/comments-json') && failRead)
+        return new Response('{}', { status: 503 });
+      return defaultFetch(input, init);
+    });
+    renderApp();
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
+    failRead = true;
+    await act(async () => {
+      await mockCommentsChanged?.();
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Saved comments are unavailable');
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await act(async () => {
+      await mockCommentsChanged?.();
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Saved comments are unavailable');
+    failRead = false;
+    await act(async () => {
+      await mockCommentsChanged?.();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps an unknown bootstrap write pending through refresh and dismissal without replay', async () => {
+    const pendingKey = 'difit-pending-comments/review-fixture/unknown';
+    const pending = JSON.stringify({ writeId: 'unknown', operations: [] });
+    localStorage.setItem(pendingKey, pending);
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    let writes = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).startsWith('/api/comments?') && init?.method === 'POST') {
+        writes++;
+        throw new TypeError('Failed to fetch');
+      }
+      return defaultFetch(input, init);
+    });
+    renderApp();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Review save was not confirmed');
+    await act(async () => {
+      await mockReloadDiff?.();
+      await mockCommentsChanged?.();
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Review save was not confirmed');
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss' }));
+    await act(async () => {
+      await mockReloadDiff?.();
+      await mockCommentsChanged?.();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(writes).toBe(1);
+    expect(localStorage.getItem(pendingKey)).toBe(pending);
+  });
+
+  it('ignores a stale comment read callback after the review owner changes', async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    let rejectRead!: (cause: Error) => void;
+    let holdRead = false;
+    let switched = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).startsWith('/api/diff') && switched)
+        return Response.json({ ...mockDiffResponse, reviewId: 'B' });
+      if (String(input).startsWith('/api/comments-json') && holdRead) {
+        holdRead = false;
+        return new Promise<Response>((_resolve, reject) => {
+          rejectRead = reject;
+        });
+      }
+      return defaultFetch(input, init);
+    });
+    renderApp();
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
+    holdRead = true;
+    const stale = mockCommentsChanged?.();
+    switched = true;
+    await act(async () => {
+      await mockReloadDiff?.();
+    });
+    await act(async () => {
+      rejectRead(new TypeError('Failed to fetch'));
+      await stale;
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+it('drains the current A owner notification when an older A writer settles after A/B/A navigation', async () => {
+  const root = createMockThread({ id: 'root', filePath: 'test.ts', line: 10, body: 'Root' });
+  const rootMessage = root.messages[0]!;
+  mockComments = [root];
+  mockFetch(mockDiffResponse);
+  const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+  let reviewId = 'review-fixture';
+  let serverThreads = [root];
+  let finishWrite: ((value: Response) => void) | undefined;
+  const writes: { writeId: string }[] = [];
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (path.startsWith('/api/diff')) return Response.json({ ...mockDiffResponse, reviewId });
+    if (path.startsWith('/api/comments-json'))
+      return Response.json({ version: 3, threads: reviewId === 'B' ? [] : serverThreads });
+    if (path.startsWith('/api/comments?') && init?.method === 'POST') {
+      writes.push(JSON.parse(String(init.body)) as { writeId: string });
+      // The native owner accepts the original write before its held reply.
+      // Reopening A recovers it with the same native write identity.
+      if (writes.length === 1) {
+        serverThreads = mockComments;
+        return new Promise<Response>((resolve) => {
+          finishWrite = resolve;
+        });
+      }
+      return Response.json({ version: 3, merged: false, threads: serverThreads });
+    }
+    return defaultFetch(input, init);
+  });
+  const view = renderApp();
+  try {
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([root]));
+    await act(async () => {});
+    mockComments = [
+      {
+        ...root,
+        messages: [...root.messages, { ...rootMessage, id: 'local', body: 'Local reply' }],
+      },
+    ];
+    view.rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>,
+    );
+    await waitFor(() => expect(finishWrite).toBeTypeOf('function'));
+    mockComments = [];
+    reviewId = 'B';
+    await act(async () => {
+      await mockReloadDiff?.();
+    });
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith([]));
+    mockComments = serverThreads;
+    reviewId = 'review-fixture';
+    await act(async () => {
+      await mockReloadDiff?.();
+    });
+    await waitFor(() => expect(writes).toHaveLength(2));
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith(serverThreads));
+    expect(writes[1]!.writeId).toBe(writes[0]!.writeId);
+    const remote = createMockThread({
+      id: 'remote',
+      filePath: 'test.ts',
+      line: 20,
+      body: 'New agent note',
+    });
+    serverThreads = [...serverThreads, remote];
+    mockReplaceThreads.mockClear();
+    await act(async () => {
+      await mockCommentsChanged?.();
+    });
+    expect(mockReplaceThreads).not.toHaveBeenCalled();
+    await act(async () => {
+      finishWrite?.(Response.json({ version: 2, merged: false, threads: mockComments }));
+    });
+    await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalledWith(serverThreads));
+    expect(writes).toHaveLength(2);
+  } finally {
+    finishWrite?.(Response.json({ version: 2, merged: false, threads: mockComments }));
+  }
+});
+
+it('keeps the new A owner read failure when an earlier A completion arrives after A/B/A navigation', async () => {
+  mockFetch(mockDiffResponse);
+  const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+  let rejectOldRead!: (cause: Error) => void;
+  let holdRead = false;
+  let reviewId = 'review-fixture';
+  let rejectCurrentRead = false;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (String(input).startsWith('/api/diff'))
+      return Response.json({ ...mockDiffResponse, reviewId });
+    if (String(input).startsWith('/api/comments-json')) {
+      if (holdRead) {
+        holdRead = false;
+        return new Promise<Response>((_resolve, reject) => {
+          rejectOldRead = reject;
+        });
+      }
+      if (rejectCurrentRead) throw new TypeError('Failed to fetch');
+    }
+    return defaultFetch(input, init);
+  });
+  renderApp();
+  await waitFor(() => expect(mockReplaceThreads).toHaveBeenCalled());
+  holdRead = true;
+  const stale = mockCommentsChanged?.();
+  reviewId = 'B';
+  await act(async () => {
+    await mockReloadDiff?.();
+  });
+  reviewId = 'review-fixture';
+  rejectCurrentRead = true;
+  await act(async () => {
+    await mockReloadDiff?.();
+  });
+  expect(screen.getByRole('alert')).toHaveTextContent('Saved comments are unavailable');
+  fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss' }));
+  await act(async () => {
+    rejectOldRead(new TypeError('Failed to fetch'));
+    await stale;
+  });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
